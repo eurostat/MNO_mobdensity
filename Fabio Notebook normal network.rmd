@@ -5,6 +5,8 @@ output:
     df_print: paged
 ---
 
+## Packages and Functions
+
 ```{r}
 # Data manipulation
 library(tidyverse)
@@ -40,15 +42,15 @@ set.seed(42)
 
 
 # Loading Custom functions
-source("pipeline functions.R")
+source("Code/pipeline functions.R")
 
 ```
 
-## Load Munich population
+## Load Munich data
 
 ```{r}
 # munich
-munich.raw <- readRDS("C:/Users/Marco/Vysoká škola ekonomická v Praze/Tony Wei Tse Hung - YAY/working objects/munich.rds")
+munich.raw <- readRDS("Data/munich.rds")
 
 munich.raster <- rasterFromXYZ(munich.raw, crs = st_crs(3035)$proj4string)
 munich <- NULL
@@ -96,7 +98,7 @@ density_plots(area$area.df)
 
 
 
-## Create radio network
+## Create radio network (less dense)
 
 ```{r, fig.height=8, fig.width=10}
 # specify parameters of each cell
@@ -127,10 +129,8 @@ param.df.reduced <- param.df %>%
 # visualize theoretical signal parameter plots
 sig.pram.plots <- sig_param_plots(param.df = param.df, range.max = 20000, base_size = 11)
 a <- ggpubr::as_ggplot(sig.pram.plots$final)
-ggsave("coverage_contur/coverage.diag.png", a, device = "png", width = 10)
-```
+ggsave("Network kind/Less dense/Plots/coverage.diag.png", a, device = "png", width = 10)
 
-```{r}
 set.seed(100)
 
 # create tower positions with attached cells
@@ -234,11 +234,10 @@ signal.dom <- signal.strength.summary %>%
 # how many tiles are not sufficiently covered
 paste0("Number of tiles which do not reach the signal dominance threshold of: " , sum(signal.dom$missing))
 # paste0("Number of tiles which do not reach the signal dominance threshold of ", sig_d_th, ": " , sum(signal.dom$missing))
-  
 ```
 
 
-# develop finer grid for contour plots
+### develop finer grid for contour plots
 This chunk is just computed for the contour plots to be smoother
 ```{r}
 finer.grid.factor <- 2
@@ -271,12 +270,11 @@ signal.strength.comb.dt.finer.grid <- rbindlist(list(MA.signal.strength.finer,
                                                      ME.signal.strength.finer,
                                                      MI.signal.strength.finer))
 
-tictoc::tic()
+
 area.reduced.contour <- area$area.finer.grid.sf %>% 
   dplyr::select(tile.id.num = tile.id) %>% 
   mutate(lon = map_dbl(geometry, ~st_centroid(.x)[[1]]),
          lat = map_dbl(geometry, ~st_centroid(.x)[[2]]))
-tictoc::toc()
 
 crs.set <- st_crs(area.reduced.contour)
 
@@ -297,54 +295,44 @@ contour.data.raw.split <- contour.data.raw %>%
   split(.$cell.kind) %>% 
   map(~distinct(., cell, x.tow, y.tow))
 
-# contour.data.raw.ME <- contour.data.raw %>% 
-#   st_drop_geometry() %>% 
-#   filter(cell.kind == "ME") %>% 
-#   distinct(cell, x.tow, y.tow)
-# 
-# contour.data.raw.ME <- contour.data.raw %>% 
-#   st_drop_geometry() %>% 
-#   filter(cell.kind == "MI") %>% 
-#   distinct(cell, x.tow, y.tow)
-
 contour.data.summary <- contour.data.raw %>% 
   dplyr::select(cell, cell.kind, s.discrete, s) %>% 
   dplyr::group_by(cell, cell.kind, s.discrete) %>%
   dplyr::summarise() %>%
   st_convex_hull()
 
-contour.complete.MA <- contour.data.summary %>% 
+(contour.complete.MA <- contour.data.summary %>% 
   filter(cell.kind == "MA" & s.discrete == "1") %>% 
   ggplot() +
   geom_sf(data = area$area.union) +
   geom_sf(color = "red", fill = "transparent") +
   geom_point(data = contour.data.raw.split$MA, aes(x = x.tow, y = y.tow), color = "black", shape = 2) +
   theme_minimal() +
-  labs(x = "", y = "")
-ggsave("coverage_contur/complete.MA.finer.png", contour.complete.MA, device = "png")
+  labs(x = "", y = ""))
+ggsave("Network kind/Less dense/Plots/contour.complete.MA.finer.png", contour.complete.MA, device = "png")
 
-contour.complete.ME <- contour.data.summary %>% 
+(contour.complete.ME <- contour.data.summary %>% 
   filter(cell.kind == "ME" & s.discrete == "1") %>% 
   ggplot() +
   geom_sf(data = area$area.union) +
   geom_sf(color = "red", fill = "transparent") +
   geom_point(data = contour.data.raw.split$ME, aes(x = x.tow, y = y.tow), color = "blue", shape = 2) +
   theme_minimal() +
-  labs(x = "", y = "")
-ggsave("coverage_contur/complete.ME.finer.png", contour.complete.ME, device = "png")
+  labs(x = "", y = ""))
+ggsave("Network kind/Less dense/Plots/contour.complete.ME.finer.png", contour.complete.ME, device = "png")
 
-contour.complete.MI <- contour.data.summary %>% 
+(contour.complete.MI <- contour.data.summary %>% 
   filter(cell.kind == "MI" & s.discrete == "1") %>% 
   ggplot() +
   geom_sf(data = area$area.union) +
   geom_sf(color = "red", fill = "transparent") +
   geom_point(data = contour.data.raw.split$MI, aes(x = x.tow, y = y.tow), color = "green", shape = 2) +
   theme_minimal() +
-  labs(x = "", y = "")
-ggsave("coverage_contur/complete.MI.finer.png", contour.complete.MI, device = "png")
+  labs(x = "", y = ""))
+ggsave("Network kind/Less dense/Plots/contour.complete.MI.finer.png", contour.complete.MI, device = "png")
 
 
-contour.certain <- contour.data.summary %>% 
+(contour.certain <- contour.data.summary %>% 
   filter(str_detect(cell, "MA.12.|ME.100.|MI.18.")) %>% 
   ggplot() +
   geom_sf(data = area$area.union) +
@@ -355,14 +343,13 @@ contour.certain <- contour.data.summary %>%
   scale_color_discrete("Signal dom.", breaks = c("1", "2"), labels = c("0.05 <= s < 0.5",
                                                                       "s >= 0.5")) +
   theme_minimal() +
-  labs(x = "", y = "")
-ggsave("coverage_contur/hull.certain.finer.png", contour.certain, device = "png")
+  labs(x = "", y = ""))
+ggsave("Network kind/Less dense/Plots/hull.certain.finer.png", contour.certain, device = "png")
 ```
 
-# These coverage diagnostics plot still need to be refined
+### These coverage diagnostics plot still need to be refined
 
 ```{r}
-tictoc::tic()
 # maximum of two rows per tile, tiles with only one row, mean they are only covered by one cell.kind
 signal.strength.summary.ck <- signal.strength.summary.helper %>% 
   group_by(tile.id, cell.kind) %>%
@@ -538,7 +525,7 @@ coverage.diag <- arrangeGrob(coverage.map.MA, coverage.map.ME,
 ```
 
 
-## Device to cell association
+## Device to cell association (creation of c.vector)
 
 ```{r}
 # specify the option of differing parameters for sig_d_th and max_overlapping_cells depending on the cell type in custom create_strength_llh function
@@ -590,7 +577,6 @@ C.vec.multiple.helper <- signal.strength.llh.combined %>%
   filter(coverage.kind == "covered by multiple antennas") %>% 
   group_split(tile.id) 
 
-tictoc::tic()
 # Calculate the number of cores
 no_cores <- availableCores() - 1
 plan(multisession, workers = no_cores)
@@ -603,7 +589,6 @@ C.vec.multiple <- C.vec.multiple.helper %>%
   future_map(~group_by(., value), .progress = T) %>% 
   future_map(~summarise(., pop.count.rand = n(), .groups = "drop"), 
              .progress = T)
-tictoc::toc()
 
 C.vec.df <- C.vec.multiple %>% 
   bind_rows() %>% 
@@ -618,9 +603,10 @@ C.vec.df <- C.vec.multiple %>%
   labs(title = "Number of phones a cell has registered",
        y = "Cell count",
        x = "Number of phones"))
+ggsave("Network kind/Less dense/Plots/histogram.c.vec.png", c.vec.hist, device = "png")
 ```
 
-True P matrix for toy world generation
+## True P matrix
 
 ```{r}
 P.long.complete.df <- full_join(signal.strength.llh.combined, C.vec.df, by = "cell") %>% 
@@ -691,7 +677,10 @@ area$area.df.complete <- area$area.df %>%
 
 ```
 
-# Modelling P via P* (one with oracle and one with equal probability)
+
+## Estimation
+
+### Modelling P via P* and other necessary estimation objects (c.vec and prior)
 
 ```{r}
 
@@ -708,12 +697,6 @@ P.star.oracle.supertile.dt <- data.table(i = P.star.supertile.long.df$cell.num,
                                          j = P.star.supertile.long.df$supertile.id.num,
                                          pij = P.star.supertile.long.df$pij)
 
-```
-
-
-# Prepare objects necessary for estimation
-
-```{r}
 ### C vector, adding antennas that have 0 phones to complete the vector, arranging it according to the antenna.ID and saving as vector
 c.vec <- P.long.complete.df %>% 
   distinct(cell, cell.num, cell.chr, phones.sum) %>% 
@@ -740,6 +723,8 @@ a.supertile.helper <- P.star.supertile.joiner %>%
   deframe()
 
 ```
+
+### Voronoi estimation (Tower, Offset, Hotpoint, Barycenter)
 
 ```{r}
 # Voronoi
@@ -784,18 +769,18 @@ VOR.barycenter.est <- VOR.barycenter$seed.voronoi.final %>%
   rename(u.VOR.barycenter = u.VOR)
 
 VOR.tower$Voronoi.regions.plot
-ggsave("Voronoi/tower.png", VOR.tower$Voronoi.regions.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/VOR_regions_tower.png", VOR.tower$Voronoi.regions.plot, device = "png")
 VOR.offset$Voronoi.regions.plot
-ggsave("Voronoi/offset.png", VOR.offset$Voronoi.regions.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/VOR_regions_offset.png", VOR.offset$Voronoi.regions.plot, device = "png")
 VOR.hotpoint$Voronoi.regions.plot
-ggsave("Voronoi/hotpoint.png", VOR.hotpoint$Voronoi.regions.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/VOR_regions_hotpoint.png", VOR.hotpoint$Voronoi.regions.plot, device = "png")
 VOR.barycenter$Voronoi.regions.plot
-ggsave("Voronoi/barycenter.png", VOR.barycenter$Voronoi.regions.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/VOR_regions_barycenter.png", VOR.barycenter$Voronoi.regions.plot, device = "png")
 
 
 ```
 
-# SB estimator
+### SB estimator
 ```{r}
 SB.oracle.est <- EM_est(c.vec.dt = c.vec.dt, 
                         P.dt = P.star.oracle.dt.d, 
@@ -805,7 +790,7 @@ SB.oracle.est <- EM_est(c.vec.dt = c.vec.dt,
   dplyr::rename(tile.id = j, prior.SB.oracle = i.u, u.SB.oracle = u1)
 ```
 
-# EM estimator, 200 iterations
+### EM estimator
 
 ```{r}
 EM.oracle.est <- EM_est(c.vec.dt = c.vec.dt, 
@@ -819,7 +804,7 @@ EM.oracle.est <- EM_est(c.vec.dt = c.vec.dt,
 ```
 
 
-# 1 DF estimator with EM iterations
+### DF estimator
 
 ```{r}
 ## DF oracle
@@ -848,7 +833,10 @@ DF_EM.oracle.est <- EM_est(c.vec.dt = c.vec.dt,
 ```
 
 
-# Putting all estimates together
+
+## Evaluation
+
+### Putting all estimates together
 ```{r}
 final.estimates.sf <- area$area.sf %>% 
   left_join(VOR.tower.est, by = "tile.id") %>% 
@@ -864,17 +852,13 @@ final.estimates.df <- final.estimates.sf %>%
 
 names.estimates <- final.estimates.sf %>% 
   # dplyr::select(pop, starts_with("u.")) %>% # all estimates
-  dplyr::select(pop, matches("VOR|u.SB|oracle200|equal200")) %>% # only specific ones for mapping
+  dplyr::select(pop, matches("VOR|u.SB|oracle200")) %>% # only specific ones for mapping
   st_drop_geometry() %>% 
   names() 
 
 ```
 
-
-
-# Evaluation
-
-## Density plots
+### 1d Density evaluation
 
 ```{r}
 
@@ -902,7 +886,7 @@ cdf.compare <- final.estimates.df %>%
          colour = "") +
     theme(legend.position = "bottom"))
   
-ggsave("eccdf.estimates.png", ECCDF.pop.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/eccdf.estimates.png", ECCDF.pop.plot, device = "png")
 
 # ECDF.pop.plot <- ECDF.df %>%   
   #   ggplot() + 
@@ -923,7 +907,69 @@ ggsave("eccdf.estimates.png", ECCDF.pop.plot, device = "png")
 ```
 
 
-## Spatial density evaluation
+### 2d density evaluation
+
+```{r}
+
+names.order.estimator <- c("u.flat", 
+                           "u.VOR.tower", "u.VOR.offset", "u.VOR.hotpoint", "u.VOR.barycenter",
+                           "u.SB.oracle",
+                           "u.EM.oracle", 
+                           "u.DF_EM.oracle")
+
+# define additional necessary rescalings of the area (next to 1x1)
+rescale.factor.list <- list(area.1x1 = 1,
+                            area.2x2 = 2, 
+                            area.4x4 = 4, 
+                            area.8x8 = 8)
+
+# aggregate estimate values based on rescaling level
+area.rescaled.grid <- map(rescale.factor.list, 
+            ~st_make_grid(area$area.sf, cellsize = area$area.params[["base.tile.size"]] * .x))
+
+
+mse.relevant.estimators <- final.estimates.sf %>% 
+  dplyr::select(tile.id, pop, matches("VOR|SB|flat|1|10|100|200")) %>% 
+  dplyr::select(-matches("prior"))
+  
+
+mse.est <- map(area.rescaled.grid, ~aggregate(mse.relevant.estimators, by = .x, FUN = mean, join = st_contains)) %>% 
+  map(~st_drop_geometry(.))
+
+point <- mse.est %>% 
+  map(~mutate(., tile.id.rescaled = row_number())) %>% 
+  map(~dplyr::select(., tile.id.rescaled, pop, starts_with("u."))) %>% 
+  map_dfr(~pivot_longer(., cols = -c(tile.id.rescaled, pop), 
+                        names_to = "estimator", values_to = "estimate"), .id = "scale") %>% 
+  mutate(rescale.factor = as.numeric(str_extract(scale, "[[:digit:]]")),
+         iteration = str_extract(estimator, "[[:digit:]]+"),
+         kind = str_extract(estimator, "[[:alpha:][:punct:]]+")) %>% 
+  mutate(iteration = case_when(is.na(iteration) ~ 0,
+                               TRUE ~ as.numeric(iteration))) %>% 
+  mutate(estimator.ordered = factor(kind, levels = names.order.estimator))
+
+
+# selected estimators (iterations) for 2d density plots
+scatter.names <- c("u.EM.oracle1", "u.EM.oracle10", "u.EM.oracle100", "u.EM.oracle200",
+                   "u.VOR.barycenter", "u.VOR.tower")
+
+(scatter.density.plots <- scatter.names %>% 
+  map(~scatter_density(point, estimator.name = .x)) %>%
+  set_names(scatter.names))
+
+ggsave("Network kind/Less dense/Plots/u.EM.oracle1.2d.density.png", scatter.density.plots$u.EM.oracle1, device = "png")
+ggsave("Network kind/Less dense/Plots/u.EM.oracle10.2d.density.png", scatter.density.plots$u.EM.oracle10, device = "png")
+ggsave("Network kind/Less dense/Plots/u.EM.oracle100.2d.density.png", scatter.density.plots$u.EM.oracle100, device = "png")
+ggsave("Network kind/Less dense/Plots/u.EM.oracle200.2d.density.png", scatter.density.plots$u.EM.oracle200, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.barycenter.2d.density.png", scatter.density.plots$u.VOR.barycenter, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.tower.2d.density.png", scatter.density.plots$u.VOR.tower, device = "png")
+
+
+
+```
+
+
+### Spatial density evaluation
 
 ```{r}
 
@@ -948,21 +994,25 @@ maps.input <- final.estimates.sf %>%
   map2(., maps.labels, ~map_density(data = maps.input, var = .x, label = .y)) %>%
   set_names(names.estimates))
 
-ggsave("Maps/pop.png", maps.estimation.density$pop, device = "png")
-ggsave("Maps/u.VOR.tower.png", maps.estimation.density$u.VOR.tower, device = "png")
-ggsave("Maps/u.VOR.offset.png", maps.estimation.density$u.VOR.offset, device = "png")
-ggsave("Maps/u.VOR.hotpoint.png", maps.estimation.density$u.VOR.hotpoint, device = "png")
-ggsave("Maps/u.VOR.barycenter.png", maps.estimation.density$u.VOR.barycenter, device = "png")
-ggsave("Maps/u.SB.oracle.png", maps.estimation.density$u.SB.oracle, device = "png")
-ggsave("Maps/u.EM.oracle200.png", maps.estimation.density$u.EM.oracle200, device = "png")
-ggsave("Maps/u.DF_EM.oracle200.png", maps.estimation.density$u.DF_EM.oracle200, device = "png")
+ggsave("Network kind/Less dense/Plots/pop.map.png", maps.estimation.density$pop, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.tower.map.png", maps.estimation.density$u.VOR.tower, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.offset.map.png", maps.estimation.density$u.VOR.offset, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.hotpoint.map.png", maps.estimation.density$u.VOR.hotpoint, device = "png")
+ggsave("Network kind/Less dense/Plots/u.VOR.barycenter.map.png", maps.estimation.density$u.VOR.barycenter, device = "png")
+ggsave("Network kind/Less dense/Plots/u.SB.oracle.map.png", maps.estimation.density$u.SB.oracle, device = "png")
+ggsave("Network kind/Less dense/Plots/u.EM.oracle200.map.png", maps.estimation.density$u.EM.oracle200, device = "png")
+ggsave("Network kind/Less dense/Plots/u.DF_EM.oracle200.map.png", maps.estimation.density$u.DF_EM.oracle200, device = "png")
 
 ```
 
-## KWD evaluation 
 
 
-### Preparing KWD for all estimates
+
+
+### KWD evaluation 
+
+
+#### Preparing KWD for all estimates
 
 ```{r}
 kwd.helper.est <- final.estimates.sf %>% 
@@ -1016,7 +1066,7 @@ flat.ref <- round(as.numeric(kwd.eval[kwd.eval$estimator == "u.flat", "kwd"]), 2
            !str_detect(estimator, "flat|prior")) %>% 
     ggplot(aes(x = estimator.new, y = kwd, fill = kind, alpha = kind.group)) + 
     geom_bar(stat = "identity", position = position_dodge(width = 0.9)) + 
-    geom_errorbar(aes(ymin = kwd.lower.bound, ymax = kwd), position = dodge, width = 0.25) +
+    geom_errorbar(aes(ymin = kwd.lower.bound, ymax = kwd), position = position_dodge(width = 0.9), width = 0.25) +
     geom_text(aes(x = estimator.new, y = kwd, label = round(kwd, 2)), 
               position = position_dodge(0.1), hjust = -0.1, color = "Black", size = 3) +
     scale_alpha(range = c(0.5, 1), 
@@ -1030,90 +1080,11 @@ flat.ref <- round(as.numeric(kwd.eval[kwd.eval$estimator == "u.flat", "kwd"]), 2
          subtitle = paste0("(Reference: Flat = ", flat.ref, ")")) + 
     theme(legend.position = "bottom"))
 
-ggsave(filename = "kwd final/kwd.final.estimates.plot.png", plot = kwd.final.estimates.plot.2x2, device = "png")
+ggsave(filename = "Network kind/Less dense/Plots/kwd.final.estimates.plot.png", plot = kwd.final.estimates.plot, device = "png")
 ```
 
 
-
-
-
-
-### KWD 1x1
-needs adjustment and takes long to run
-
-```{r}
-# # KWD evaluation
-# 
-# rescale.factor <- 1
-# 
-# # area.2x2 <- area$area.sf %>% 
-# #   dplyr::select(tile.id, pop) %>% 
-# #   st_make_grid(cellsize = area$area.params[["base.tile.size"]] * rescale.factor)
-# 
-# kwd.helper.est <- final.estimates.sf %>% 
-#   # dplyr::select(tile.id, pop, starts_with("u.")) %>% 
-#   dplyr::select(tile.id, all_of(names.estimates)) %>%
-#   mutate(u.flat = mean(pop)) %>% 
-#   # aggregate(by = area.2x2, FUN = sum, join = st_contains) %>% 
-#   mutate(lon = map_dbl(geometry, ~st_centroid(.x)[[1]]),
-#          lat = map_dbl(geometry, ~st_centroid(.x)[[2]])) %>% 
-#   st_drop_geometry()
-# 
-# coordinates <- kwd.helper.est %>% 
-#   dplyr::select(lon, lat) %>% 
-#   as.matrix()
-# 
-# weights <- kwd.helper.est %>% 
-#   dplyr::select(pop, matches("u.")) %>% 
-#   as.matrix()
-# 
-# kwd.final <- compareOneToMany(coordinates, weights, L = 3, recode = TRUE)
-# cat("runtime:", kwd.final$runtime, " distance:", kwd.final$distance, " nodes:", 
-#     kwd.final$nodes, "arcs:", kwd.final$arcs, "\n")
-# 
-# names.weights <- colnames(weights)[-1]
-# kwd.eval <- tibble(estimator = names.weights,
-#                    kwd = kwd.final$distance * rescale.factor) %>%  # rescaling according to scale
-#   mutate(kwd.lower.bound = kwd - ((kwd / 100) * 1.29)) %>%  # for L=3 within 1 percent 
-#   mutate(iteration = str_extract(estimator, "[[:digit:]]+"),
-#          kind = str_extract(estimator, "[[:alpha:][:punct:]]+")) %>%
-#   mutate(iteration = case_when(is.na(iteration) ~ 0,
-#                                TRUE ~ as.numeric(iteration))) %>% 
-#   group_by(kind) %>% 
-#   mutate(min.kwd.kind = min(kwd),
-#          kind.group = row_number() / max(row_number())) %>% # find minimum per estimator (for ordering help)
-#   ungroup() %>% 
-#   arrange(desc(min.kwd.kind), iteration) %>% 
-#   mutate(final.order = row_number()) %>% 
-#   mutate(estimator.new = factor(final.order, labels = estimator))
-# 
-# flat.ref <- round(as.numeric(kwd.eval[kwd.eval$estimator == "u.flat", "kwd"]), 2)
-# 
-# dodge <- position_dodge(width = 0.9)
-# 
-# (kwd.complete.plot <- kwd.eval %>% 
-#     filter(kind.group == 1,
-#            !str_detect(estimator, "flat")) %>% 
-#     ggplot(aes(x = estimator.new, y = kwd, fill = kind, alpha = kind.group)) + 
-#     geom_bar(stat = "identity", position = dodge) + 
-#     geom_errorbar(aes(ymin = kwd.lower.bound, ymax = kwd), position = dodge, width = 0.25) +
-#     geom_text(aes(x = estimator.new, y = kwd, label = round(kwd, 2)), 
-#               position = position_dodge(0.1), hjust = -0.1, color = "Black", size = 3) +
-#     scale_alpha(range = c(0.5, 1), 
-#                 guide = F
-#                 # labels = unique(kwd.eval$iteration)
-#                 ) + # noch ändern
-#     scale_fill_ptol(guide = FALSE) +
-#     coord_flip() +
-#     labs(x = "", y = "KWD", 
-#          alpha = "Iteration", 
-#          subtitle = paste0("(Reference: Flat = ", flat.ref, ")")) + 
-#     theme(legend.position = "bottom"))
-# 
-# ggsave(filename = "kwd final/kwd.complete.1x1.plot.png", plot = kwd.complete.plot, device = "png")
-```
-
-#### kwd convergence (EM and DF)
+#### KWD convergence (EM and DF)
 
 ```{r}
 
@@ -1134,7 +1105,7 @@ kwd.eval.convergence <- kwd.eval %>%
          y = "KWD"))
 
 
-ggsave("kwd convergence/kwd.2x2.convergence.png", kwd.convergence.plot.log.text, device = "png")
+ggsave("Network kind/Less dense/Plots/kwd.convergence.png", kwd.convergence.plot.log.text, device = "png")
 
 
 (time.convergence.plot <- kwd.eval.convergence %>% 
@@ -1142,79 +1113,17 @@ ggsave("kwd convergence/kwd.2x2.convergence.png", kwd.convergence.plot.log.text,
     ggplot() +
     geom_line(aes(x = iteration, y = time.final, color = kind)) +
     geom_point(aes(x = iteration, y = time.final, color = kind)) +
-    scale_color_discrete(breaks = c("u.DF_EM.oracle", "u.EM.oracle"), labels = c("DF", "EM")) +
+    scale_color_discrete(breaks = c("u.DF_EM.oracle", "u.EM.oracle"), labels = c("DF_o", "EM_o")) +
     labs(color = "Estimator",
          x = "Iteration",
          y = "Time in seconds"))
   
-ggsave("kwd convergence/time.png", time.convergence.plot, device = "png")
+ggsave("Network kind/Less dense/Plots/computation.time.png", time.convergence.plot, device = "png")
 
 ```
 
 
 
- continue here
-# rescaling level evaluation
 
-
-```{r}
-
-names.order.estimator <- c("u.flat", 
-                           "u.VOR.tower", "u.VOR.offset", "u.VOR.hotpoint", "u.VOR.barycenter",
-                           "u.SB.equal", "u.SB.oracle",
-                           "u.EM.equal", "u.EM.oracle", 
-                           "u.DF_EM.equal", "u.DF_EM.oracle",
-                           "u.DF_DF.oracle", "u.DF_DF.equal")
-
-# define additional necessary rescalings of the area (next to 1x1)
-rescale.factor.list <- list(area.1x1 = 1,
-                            area.2x2 = 2, 
-                            area.4x4 = 4, 
-                            area.8x8 = 8)
-
-# aggregate estimate values based on rescaling level
-area.rescaled.grid <- map(rescale.factor.list, 
-            ~st_make_grid(area$area.sf, cellsize = area$area.params[["base.tile.size"]] * .x))
-
-
-mse.relevant.estimators <- final.estimates.sf %>% 
-  dplyr::select(tile.id, pop, matches("VOR|SB|flat|1|10|100|200")) %>% 
-  dplyr::select(-matches("prior"))
-  
-
-mse.est <- map(area.rescaled.grid, ~aggregate(mse.relevant.estimators, by = .x, FUN = mean, join = st_contains)) %>% 
-  map(~st_drop_geometry(.))
-
-point <- mse.est %>% 
-  map(~mutate(., tile.id.rescaled = row_number())) %>% 
-  map(~dplyr::select(., tile.id.rescaled, pop, starts_with("u."))) %>% 
-  map_dfr(~pivot_longer(., cols = -c(tile.id.rescaled, pop), 
-                        names_to = "estimator", values_to = "estimate"), .id = "scale") %>% 
-  mutate(rescale.factor = as.numeric(str_extract(scale, "[[:digit:]]")),
-         iteration = str_extract(estimator, "[[:digit:]]+"),
-         kind = str_extract(estimator, "[[:alpha:][:punct:]]+")) %>% 
-  mutate(iteration = case_when(is.na(iteration) ~ 0,
-                               TRUE ~ as.numeric(iteration))) %>% 
-  mutate(estimator.ordered = factor(kind, levels = names.order.estimator))
-
-
-# selected estimators (iterations) for 2d density plots
-scatter.names <- c("u.EM.oracle1", "u.EM.oracle10", "u.EM.oracle100", "u.EM.oracle200",
-                   "u.VOR.barycenter", "u.VOR.tower")
-
-scatter.density.plots <- scatter.names %>% 
-  map(~scatter_density(point, estimator.name = .x)) %>%
-  set_names(scatter.names)
-
-ggsave("2d_density/u.EM.oracle1.density.png", scatter.density.plots$u.EM.oracle1, device = "png")
-ggsave("2d_density/u.EM.oracle10.density.png", scatter.density.plots$u.EM.oracle10, device = "png")
-ggsave("2d_density/u.EM.oracle100.density.png", scatter.density.plots$u.EM.oracle100, device = "png")
-ggsave("2d_density/u.EM.oracle200.density.png", scatter.density.plots$u.EM.oracle200, device = "png")
-ggsave("2d_density/u.VOR.barycenter.png", scatter.density.plots$u.VOR.barycenter, device = "png")
-ggsave("2d_density/u.VOR.tower.png", scatter.density.plots$u.VOR.tower, device = "png")
-
-
-
-```
 
 
