@@ -1311,3 +1311,9 @@ ggsave("Plots/kwd.convergence.png", kwd.convergence.plot.log.text, device = "png
 
 
 ```
+
+
+```{r}
+sessionInfo()
+```
+
