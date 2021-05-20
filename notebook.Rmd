@@ -988,7 +988,7 @@ MLE.time <- system.time({
 
 ```
 
-One MLE iteration takes for this toyworld and the specified configurations on average ca. `r paste(round(MLE.time[[3]] / n.iter.MLE), 0)` seconds.
+One MLE iteration takes for this toyworld and the specified configurations on average ca. `r paste(round(MLE.time[[3]] / n.iter.MLE, 0))` seconds.
 
 ## Estimation: DF
 
@@ -1027,7 +1027,7 @@ DF.est <- EM_est(c.vec.dt = c.vec.dt,
   dplyr::select(tile.id, starts_with("u"))
 ```
 
-Computing the raw DF-estimate (renormalized but without further MLE iterations) takes for this toyworld and the specified configurations ca. `r paste(round(DF.raw.time + (MLE.time[[3]] / n.iter.MLE), 0))` seconds.
+Computing the raw DF-estimate (renormalized but without further MLE iterations) takes for this toyworld and the specified configurations ca. `r paste(round(DF.raw.time[[3]] + (MLE.time[[3]] / n.iter.MLE), 0))` seconds.
 
 # Evaluation
 
