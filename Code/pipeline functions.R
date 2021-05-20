@@ -228,7 +228,7 @@ create_cellplan <- function(area.sf, area.bbox, area.elevation, cells.unparam, c
 }
 
 
-smart.round <- function(x, digits = 0) {
+smart_round <- function(x, digits = 0) {
   up <- 10 ^ digits
   x <- x * up
   y <- floor(x)
@@ -241,7 +241,7 @@ smart.round <- function(x, digits = 0) {
 # implement selected iterations option with input vector
 
 # New MLE iteration function by Matyas
-EM_est <- function(c.vec.dt, P.dt, a.vec.dt, n.iter, selected.range, ldt = 10^-04) {
+EM_est <- function(c.vec.dt, P.dt, a.vec.dt, n.iter, selected.range, ldt = 10^-04, message = T) {
   
   cdt <- c.vec.dt
   pij <- cdt[P.dt, on = "i"]
@@ -252,7 +252,11 @@ EM_est <- function(c.vec.dt, P.dt, a.vec.dt, n.iter, selected.range, ldt = 10^-0
   keep <- a.vec.dt # base dataframe for the selected iterations
   
   for(m in 1:(n.iter)){
-    cat(format(Sys.time()), paste0("---- calculating u", m), "----\n")
+    
+    if(message == T) {
+      cat(format(Sys.time()), paste0("---- calculating u", m), "----\n")
+    }
+    
     cols <- c("j", paste0("u"))
     ju <- tiles[, cols, with = F]
     setnames(ju, c("j", "u"))
@@ -863,9 +867,21 @@ pop_summary_results <- function(data) {
 ### Pop Density plots 
 #############
 
+custom_ecdf_prep <- function(data) {
+  dat <- data %>% 
+    mutate(pop.plot = pop + 1) %>%  
+    arrange(pop.plot) %>%  
+    mutate(prob = 1 / n()) %>%  
+    mutate(cum.prob = cumsum(prob)) %>%  
+    mutate(cum.prob.comp = 1 - cum.prob) %>%  
+    mutate(log10.cum.prob.comp = log10(cum.prob.comp)) %>% 
+    mutate(log10.pop = log10(pop.plot)) %>%  
+    mutate(cum.prob.comp = 1 - cum.prob)
+  
+  return(dat)
+}
+
 density_plots <- function(data) {
-  
-  
   
   custom_ecdf_prep <- function(data) {
     dat <- data %>% 
@@ -881,6 +897,8 @@ density_plots <- function(data) {
     return(dat)
   }
   
+  data <- area$area.df
+  minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
   
   pop.emp.dist <- data %>% 
     ungroup() %>% 
@@ -896,23 +914,31 @@ density_plots <- function(data) {
     mutate(cum.prob.comp = round(cum.prob.comp, 3)) %>% # effective plot sample --> faster plotting excluding overplot
     distinct()
   
-  ECCDF.pop.plot <- ECCDF.df %>%   
+  ECCDF.pop.plot <- ECDF.df %>%   
     ggplot() + 
-    geom_point(aes(x = log10.pop, y = log10.cum.prob.comp,
-                   color = type)) + 
-    geom_hline(yintercept = -0.3010300, linetype = "dotted") + 
-    geom_hline(yintercept = -1, linetype = "dotted") + 
-    geom_text(x = 1.8, y = -0.15, label = "50% of the data") + 
-    geom_text(x = 1.8, y = -0.8, label = "90% of the data") + 
+    geom_point(aes(x = pop.plot, y = cum.prob.comp
+                   # color = type
+                   )) + 
+    # geom_hline(yintercept = -0.3010300, linetype = "dotted") + 
+    # geom_hline(yintercept = -1, linetype = "dotted") + 
+    # geom_text(x = 1.8, y = -0.15, label = "50% of the data") + 
+    # geom_text(x = 1.8, y = -0.8, label = "90% of the data") + 
     scale_color_ptol() + 
-    labs(title = "ECCDF (Insert ECDF capped at 30)", y = "log10(ECCDF)", x = "log10(Mobile phones)",  
+    scale_y_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    scale_x_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    annotation_logticks(sides = "lb") +
+    labs(title = "ECCDF (Insert ECDF capped at 30)", y = "ECCDF", x = "Mobile phones",  
          colour = "") + 
     theme(legend.position = "bottom") 
   
   ECDF.pop.plot <- ECDF.df %>%   
     ggplot() + 
-    geom_point(aes(x = pop.plot, y = cum.prob.comp,
-                   color = type
+    geom_point(aes(x = pop.plot, y = cum.prob.comp
+                   # color = type
                    )) + 
     scale_color_ptol() +
     xlim(0, 30) +
@@ -924,7 +950,7 @@ density_plots <- function(data) {
   combined <- ECCDF.pop.plot +
     annotation_custom(ggplotGrob(ECDF.pop.plot), 
                       xmin = 0, xmax = 1.5, 
-                      ymin = min(ECCDF.df$log10.cum.prob.comp, na.rm = T), ymax = -1.5)
+                      ymin = -3, ymax = -1.5)
   
   # return(list(ECDF = ECDF.pop.plot,
   #             ECCDF = ECCDF.pop.plot))
@@ -959,8 +985,7 @@ scatter_density <- function(point, estimator.name){
   complete.plot.final <- arrangeGrob(complete.plot[[1]], complete.plot[[2]], complete.plot[[3]], complete.plot[[4]],
                                      top = textGrob(paste("Joint Density", estimator.name) , gp = gpar(fontsize = 10)),
                                      # padding = 2,
-                                     layout_matrix = rbind(c(1, 2),
-                                                           c(3, 4)))
+                                     layout_matrix = rbind(c(1, 2, 3, 4)))
   # ggsave("2d_density/d.png", complete.plot.final, device = "png")
   # grid.arrange(complete.plot[[1]], complete.plot[[2]], complete.plot[[3]], complete.plot[[4]],
   #             padding = 0,
@@ -985,15 +1010,22 @@ scatter_density <- function(point, estimator.name){
   zoom.xy.final <- arrangeGrob(zoom.xy[[1]], zoom.xy[[2]], zoom.xy[[3]], zoom.xy[[4]],
                                # padding = 0,
                                top = textGrob("Zoom on XY", gp = gpar(fontsize = 10)),
-                               layout_matrix = rbind(c(1, 2),
-                                                     c(3, 4)))
+                               layout_matrix = rbind(c(1, 2, 3, 4)))
   
+  minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
   
   log.both <- base.data.ls %>% 
     map(~ggplot(., aes(x = log10(pop + 1), y = log10(estimate + 1))) +
           geom_pointdensity(size = 0.4) +
           scale_color_viridis(guide = F) +
           geom_abline(intercept = 0, slope = 1, linetype = "dotted") +
+          scale_y_log10(labels = scales::trans_format("log10", 
+                                                      scales::math_format(10^.x)),
+                        minor_breaks = minor.breaks) +
+          scale_x_log10(labels = scales::trans_format("log10", 
+                                                      scales::math_format(10^.x)),
+                        minor_breaks = minor.breaks) +
+          annotation_logticks(sides = "lb") +
           labs(title = "",
                x = "",
                y = "") +
@@ -1005,15 +1037,13 @@ scatter_density <- function(point, estimator.name){
   log.both.final <- arrangeGrob(log.both[[1]], log.both[[2]], log.both[[3]], log.both[[4]],
                                 # padding = 0,
                                 top = textGrob("Joint Density log10", gp = gpar(fontsize = 10)),
-                                layout_matrix = rbind(c(1, 2),
-                                                      c(3, 4)))
+                                layout_matrix = rbind(c(1, 2, 3, 4)))
   
   scatter.density <- arrangeGrob(complete.plot.final, zoom.xy.final, log.both.final,
                                  # padding = 0,
-                                 layout_matrix = rbind(c(1, 1),
-                                                       c(1, 1),
-                                                       c(2, 3),
-                                                       c(2, 3)))
+                                 layout_matrix = rbind(c(1),
+                                                       c(2),
+                                                       c(3)))
   
   return(scatter.density)
   
