@@ -867,19 +867,19 @@ pop_summary_results <- function(data) {
 ### Pop Density plots 
 #############
 
-custom_ecdf_prep <- function(data) {
-  dat <- data %>% 
-    mutate(pop.plot = pop + 1) %>%  
-    arrange(pop.plot) %>%  
-    mutate(prob = 1 / n()) %>%  
-    mutate(cum.prob = cumsum(prob)) %>%  
-    mutate(cum.prob.comp = 1 - cum.prob) %>%  
-    mutate(log10.cum.prob.comp = log10(cum.prob.comp)) %>% 
-    mutate(log10.pop = log10(pop.plot)) %>%  
-    mutate(cum.prob.comp = 1 - cum.prob)
-  
-  return(dat)
-}
+# custom_ecdf_prep <- function(data) {
+#   dat <- data %>% 
+#     mutate(pop.plot = pop + 1) %>%  
+#     arrange(pop.plot) %>%  
+#     mutate(prob = 1 / n()) %>%  
+#     mutate(cum.prob = cumsum(prob)) %>%  
+#     mutate(cum.prob.comp = 1 - cum.prob) %>%  
+#     mutate(log10.cum.prob.comp = log10(cum.prob.comp)) %>% 
+#     mutate(log10.pop = log10(pop.plot)) %>%  
+#     mutate(cum.prob.comp = 1 - cum.prob)
+#   
+#   return(dat)
+# }
 
 density_plots <- function(data) {
   
@@ -897,7 +897,6 @@ density_plots <- function(data) {
     return(dat)
   }
   
-  data <- area$area.df
   minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
   
   pop.emp.dist <- data %>% 

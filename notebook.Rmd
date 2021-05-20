@@ -1,0 +1,1313 @@
+---
+title: "Supplementary material: Toyworld generation, Estimation and Evaluation"
+author: "Fabio Ricciato, Angelo Coluccia, Marco Ramljak"
+date: "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    code_folding: show
+    code_download: true
+    theme: sandstone
+    toc: true
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+knit: (function(input_file, encoding) { out_dir <- 'docs'; rmarkdown::render(input_file,
+  encoding=encoding, output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+This notebook provides supplementary material as well as the complete code for reproducing the toyworld, executing all estimators and evaluating these estimators. The toyworld is based on a semi-synthetic data generated process. For this, census data from Germany on a 100m\*100m regular grid has been used, which can be downloaded [here](https://www.zensus2011.de/DE/Home/Aktuelles/DemografischeGrunddaten.html?nn=3065474). Each element in this grid is expressed as a tile. For computation purposes only a small area of Germany was used for the toyworld, namely the area of Munich and its near surroundings. This focus area includes 160,000 tiles. The code for clipping this specific area can be found [here](https://github.com/R-ramljak/MNO_mobdensity/blob/master/Code/Munich_generate.R), which is also part of this research repository. For a mobile phone population the regular census population values are used. To mimic the mobile phone population of one mobile network operator (MNO) the population is reduced to about a third.
+
+Furthermore, custom functions have been built and are used throughout this notebook, which can be found [here](https://github.com/R-ramljak/MNO_mobdensity/blob/master/Code/pipeline%20functions.R). In near time, these will be released within an R-package.
+
+The notebook has three main parts: Toyworld Generation, Estimation, Evaluation.
+
+# General Setup: Loading Packages and Custom Functions
+
+```{r packages, message=FALSE}
+# Data manipulation
+library(tidyverse)
+library(data.table) 
+
+# Spatial operations
+library(sf)
+library(raster)
+library(furrr)
+library(stars)
+
+# Matrix operations
+library(Matrix)
+
+# MNO data handling and propagation model setup
+# Credits to Prof. Martijn Tennekes https://github.com/mtennekes/mobloc
+library(mobloc)
+
+# Comparison of 2d histograms (Kantorovitch Wasserstein distance a.k.a. Earth Movers distance)
+# Credits to Prof. Stefano Gualandi https://cran.r-project.org/web/packages/SpatialKWD/SpatialKWD.pdf
+library(SpatialKWD)
+
+# Output organisation and plotting support
+library(ggthemes)
+library(viridis)
+library(ggrepel)
+library(ggpointdensity)
+library(grid)
+library(gridExtra)
+library(knitr)
+library(DT)
+
+# seed for reproducibility
+set.seed(42)
+
+
+# Loading Custom functions
+source("Code/pipeline functions.R")
+
+```
+
+# Toyworld Generation
+
+This part is concerned with generating a toyworld that is based on the above specified focus area. After specifying the population aspect of the toyworld, the radio network will be specified.
+
+## Toyworld Generation: Population
+
+This subchapter defines the generation of a population. As mentioned above the focus area is zoomed into the area of Munich and its near surroundings. The following chunk specifies the necessary objects to continue with the creation of a radio network in this focus area.
+
+```{r population-data}
+# data read in
+munich.raw <- readRDS("Data/munich.rds")
+
+# define raster object from focus area
+munich.raster <- rasterFromXYZ(munich.raw, crs = st_crs(3035)$proj4string)
+
+# define empty list object where all GTP objects will be stored
+munich <- NULL
+
+# define sf version of raster object
+munich$area.sf <- munich.raster %>%
+  st_as_stars() %>%
+  st_as_sf() %>%
+  dplyr::select(tile.id, pop, elevation) %>%
+  mutate(type = "NA") # only necessary if different tile types can be defined (urban, rural, etc...)
+
+# regular dataframe version
+munich$area.df <- munich$area.sf %>%
+  st_drop_geometry()
+
+# unionized version of focus area
+munich$area.union <- munich$area.sf %>%
+  st_union()
+
+# bounding box coordinates of focus area
+munich$area.bbox <- munich$area.union %>%
+  st_bbox(crs = sf::st_crs(3035))
+
+# specify raster object and tile id number
+munich$area.raster <- munich.raster %>%
+  raster(., layer = "tile.id")
+
+# specify raster object and elevation value of each tile (here considered as constant)
+munich$area.elevation <- munich.raster %>%
+  raster(., layer = "elevation")
+
+# number of tiles
+munich$area.params[["tile.num"]] <- length(munich$area.df$tile.id)
+
+# size of tiles
+munich$area.params[["base.tile.size"]] <- as.numeric(sqrt(st_area(munich$area.sf[1,])))
+
+# stroing everything in area object
+area <- munich
+```
+
+```{r gtp-map, fig.cap="Spatial population density of the ground truth population"}
+# adjustable break points for map categories
+breaks <- c(0, 2, 5, 10, 20, 50, 100, 200, 350, Inf)
+# plot map and print
+area$area.sf %>% 
+  mutate(pop.cat = cut(pop, breaks = breaks, dig.lab = 7, right = F)) %>% 
+  map_density(data = ., var = "pop.cat", label = "GTP")
+
+```
+
+```{r pop-summary}
+# summary descriptives of GTP
+pop_summary_results(area$area.sf) %>% 
+  dplyr::select(n.tiles = n.type, mean.pop, sd.pop, min.pop, max.pop, sum.pop)
+
+```
+
+```{r density-plot, fig.cap="Distribution of the ground truth population"}
+# ECCDF and ECDF of GTP
+(density_plots(area$area.df))
+```
+
+## Toyworld Generation: Radio network
+
+This subchapter refers to the development of a radio network within our focus area. Developing the radio network is heavily dependent on the `mobloc` package, which is promoted through the European Statistical System. However, certain functions have been adjusted to the authors needs.
+
+In general, the `mobloc` package allows to define many parameters, however, if they are not defined, default parameters, set by the package, are used. This makes it very easy to implement as much / as little information one has on a certain network and always making it work. The following adjustable parameters and default values are provided through the package for creating a radio network and modelling the signal strength in a focus area:
+
+```{r}
+# possible mobloc parameters
+mobloc_param()
+```
+
+This toyworld contains a radio network with three layers (Macro, Meso and Micro). The development of each layer starts with a hexagonal grid in which the points define tower locations. The hexagons have different sizes (i.e. tower distance) dependent on the layer and contain some randomness within the layer (jitter) to prevent estimation artifacts. Each layer spans over the complete focus area.
+
+On each tower three directional antennas are placed that are directed in a 120° angle to each other. All layers contain a rotation parameter to prevent antennas of different layers broadcasting into the exact same direction, in reference to the focus area. No omnidirectional antennas are implemented in this toyworld, therefore, all `mobloc` parameters with the suffix "\_small" are not used.
+
+The antennas are specified with layer specific parameters (e.g. height, power, path loss exponent, etc.). All antennas are specified in a so called cellplan in which all parameters are nested/asjusted. When the cellplan is completed the antenna specific broadcasting profile (i.e. cell profile) is estimated and projected onto the focus area. The function `compute_sig_strength()` computes the distance, signal strength and signal dominance between any tile and any antenna. Furthermore, a minimum parameter is implemented that defines the minimum signal dominance value an antenna-tile relationship needs to have in order to be considered "covered". For the following estimators, it needs to be assured that every tile is sufficiently covered, meaning, that there is at least one antenna-tile relationship that has a signal dominance value higher than the minimum threshold.
+
+```{r, network-parameters, message=FALSE, warning=FALSE, fig.height=8, fig.width=10, fig.cap="Theoretical radio network parameters for each layer"}
+# specify parameters of each cell
+MA.cell.param.mobloc <- mobloc_param(W = 5, # Power in Watts
+                                     range = 10000, # maximum coverage range
+                                     ple = 3.4, # Path loss exponent
+                                     height = 10, # height of the antenna
+                                     midpoint = -85, # midpoint parameter of the logistic function for signal dominance
+                                     steepness = 0.15, # steepness parameter of the logistic function for signal dominance
+                                     sig_d_th = 0.05) # dominance minimum threshold 
+
+ME.cell.param.mobloc <- mobloc_param(W = 50, range = 3500, ple = 3.8, height = 10,
+                                     midpoint = -85, steepness = 0.3, sig_d_th = 0.05)
+
+MI.cell.param.mobloc <- mobloc_param(W = 1, range = 3500, ple = 4, height = 6,
+                                     midpoint = -85, steepness = 0.4, sig_d_th = 0.05)
+
+# create dataframe for theoretical signal strength distribution
+param.df <- tibble(cell.kind = c("MA", "ME", "MI"),
+                   label = c("Macro", "Meso", "Micro"),
+                   W = c(MA.cell.param.mobloc$W, ME.cell.param.mobloc$W, MI.cell.param.mobloc$W),
+                   ple = c(MA.cell.param.mobloc$ple, ME.cell.param.mobloc$ple, MI.cell.param.mobloc$ple),
+                   range = c(MA.cell.param.mobloc$range, ME.cell.param.mobloc$range, MI.cell.param.mobloc$range),
+                   midpoint = c(MA.cell.param.mobloc$midpoint, ME.cell.param.mobloc$midpoint, MI.cell.param.mobloc$midpoint),
+                   steepness = c(MA.cell.param.mobloc$steepness, ME.cell.param.mobloc$steepness, MI.cell.param.mobloc$steepness),
+                   dominance.th = c(MA.cell.param.mobloc$sig_d_th,
+                                    ME.cell.param.mobloc$sig_d_th,
+                                    MI.cell.param.mobloc$sig_d_th))
+
+# reduced data frame of theoretical signal strength distribution
+param.df.reduced <- param.df %>% 
+  dplyr::select(cell.kind, dominance.th)
+
+# theoretical signal strength parameter plots
+sig.pram.plots <- sig_param_plots(param.df = param.df, range.max = 20000, base_size = 11)
+
+# print
+(a <- ggpubr::as_ggplot(sig.pram.plots$final))
+# save
+ggsave("Plots/coverage.diag.png", a, device = "png", width = 10)
+
+set.seed(100)
+
+# create tower positions with attached cells
+MA.cells.unparam <- create_cells(area.sf = area$area.sf, # focus area
+                                 tower.dist = 8500, # tower distance
+                                 rotation.deg = 0, # rotation parameter
+                                 jitter = 1000, # amount of jitter in meters
+                                 small = FALSE, # directional cell
+                                 subscript = "MA", # layer label
+                                 seed = 3)
+
+ME.cells.unparam <- create_cells(area.sf = area$area.sf,
+                                 tower.dist = 3500, rotation.deg = 35,
+                                 jitter = 700, small = FALSE,
+                                 subscript = "ME", seed = 7)
+
+MI.cells.unparam <- create_cells(area.sf = area$area.sf,
+                                 tower.dist = 10000, rotation.deg = 60,
+                                 jitter = 2000, small = FALSE,
+                                 subscript = "MI", seed = 10)
+
+
+# create the cellplan and validate it with the specified parameters
+MA.cellplan.val <- create_cellplan(area.sf = area$area.sf,  
+                                   area.bbox = area$area.bbox, 
+                                   area.elevation = area$area.elevation,
+                                   cells.unparam = MA.cells.unparam,
+                                   cell.param.mobloc = MA.cell.param.mobloc)
+
+ME.cellplan.val <- create_cellplan(area.sf = area$area.sf,
+                                   area.bbox = area$area.bbox,
+                                   area.elevation = area$area.elevation,
+                                   cells.unparam = ME.cells.unparam,
+                                   cell.param.mobloc = ME.cell.param.mobloc)
+
+MI.cellplan.val <- create_cellplan(area.sf = area$area.sf,
+                                   area.bbox = area$area.bbox,
+                                   area.elevation = area$area.elevation,
+                                   cells.unparam = MI.cells.unparam,
+                                   cell.param.mobloc = MI.cell.param.mobloc)
+# cellplans need to be made valid!
+
+cellplan.combined <- bind_rows(as_tibble(MA.cellplan.val$cellplan.val),
+                               as_tibble(ME.cellplan.val$cellplan.val),
+                               as_tibble(MI.cellplan.val$cellplan.val)) %>% 
+  mutate(cell.kind = substr(cell, 1, 2)) %>% 
+  left_join(param.df.reduced, by = "cell.kind") # join dominance threshold to use later in create_strength_llh()
+
+# to join variable dominance.th later on
+cellplan.combined.reduced <- cellplan.combined %>% 
+  dplyr::select(cell, dominance.th)
+
+
+# compute signal strength and device to cell association
+MA.signal.strength <- compute_sig_strength(cp = MA.cellplan.val$cellplan.val, 
+                                           raster = area$area.raster, 
+                                           param = MA.cellplan.val$cell.param.mobloc, 
+                                           elevation = area$area.elevation)
+
+ME.signal.strength <- compute_sig_strength(cp = ME.cellplan.val$cellplan.val,
+                                           raster = area$area.raster,
+                                           param = ME.cellplan.val$cell.param.mobloc,
+                                           elevation = area$area.elevation)
+
+MI.signal.strength <- compute_sig_strength(cp = MI.cellplan.val$cellplan.val,
+                                           raster = area$area.raster,
+                                           param = MI.cellplan.val$cell.param.mobloc,
+                                           elevation = area$area.elevation)
+
+# create signal strength object of all cells
+signal.strength.comb.dt <- rbindlist(list(MA.signal.strength,
+                                          ME.signal.strength,
+                                          MI.signal.strength))
+
+  
+
+
+signal.strength.summary.helper <- signal.strength.comb.dt %>%
+  as_tibble() %>%
+  mutate(tile.id = as.character(rid)) %>%
+  mutate(cell.kind = substr(cell, 1, 2)) %>%
+  mutate(cell.chr = as.character(cell)) %>%
+  left_join(cellplan.combined.reduced, by = c("cell.chr" = "cell")) %>% 
+  filter(!s < dominance.th) # filter rows out that are below the set dominance threshold
+
+signal.strength.summary <- signal.strength.summary.helper %>% 
+  group_by(tile.id) %>%
+  mutate(max.dBm = max(dBm),
+         max.s = max(s),
+         min.dist = min(dist)) %>%
+  ungroup()
+
+
+# identify the cell-tile relations with maximum signal dominance and identify tiles that are not covered sufficiently
+signal.dom <- signal.strength.summary %>% 
+  distinct(tile.id, max.s) %>%
+  left_join(signal.strength.summary, by = c("tile.id", "max.s" = "s")) %>% 
+  dplyr::select(tile.id, max.s, cell, cell.kind) %>% 
+  mutate(tile.id = as.integer(tile.id)) %>% 
+  full_join(area$area.sf, by = "tile.id") %>% 
+  mutate(missing = case_when(is.na(max.s) ~ 1,
+                             TRUE ~ 0))
+
+# how many tiles are not sufficiently covered
+paste0("Number of tiles which do not reach the signal dominance threshold of: " , sum(signal.dom$missing))
+# paste0("Number of tiles which do not reach the signal dominance threshold of ", sig_d_th, ": " , sum(signal.dom$missing))
+```
+
+The following chunk is merely executed to develop a smoother visualization of the radio cell coverage profiles. For this, the signal strength is calculated on a finer grid 25m\*25m. This finer grid is only relevant for this chunk and the following contour visualizations. The contours are interpolated based on the tiles' signal dominance values and the tile centroids.
+
+```{r contur-plot-setup, message=FALSE}
+# specifiy how much finer the grid should be
+finer.grid.factor <- 2
+finer.grid.tile.id <- c(1:640000) # adjust to grid factor
+
+# disaggregate the regular grid based on the finer.grid.factor
+area$area.raster.finer <- disaggregate(area$area.raster, finer.grid.factor) %>% 
+  setValues(., finer.grid.tile.id)
+
+# disaggregate the elevation grid based on the finer.grid.factor
+area$area.elevation.finer <- disaggregate(area$area.elevation, finer.grid.factor)
+
+# transform raster back to sf
+area$area.finer.grid.sf <- st_as_sf(st_as_stars(area$area.raster.finer))
+
+# compute signal strength and device to cell association for finer grid for each layer
+MA.signal.strength.finer <- compute_sig_strength(cp = MA.cellplan.val$cellplan.val, 
+                                                 raster = area$area.raster.finer, 
+                                                 param = MA.cellplan.val$cell.param.mobloc, 
+                                                 elevation = area$area.elevation.finer)
+
+ME.signal.strength.finer <- compute_sig_strength(cp = ME.cellplan.val$cellplan.val,
+                                                 raster = area$area.raster.finer,
+                                                 param = ME.cellplan.val$cell.param.mobloc,
+                                                 elevation = area$area.elevation.finer)
+
+MI.signal.strength.finer <- compute_sig_strength(cp = MI.cellplan.val$cellplan.val,
+                                                 raster = area$area.raster.finer,
+                                                 param = MI.cellplan.val$cell.param.mobloc,
+                                                 elevation = area$area.elevation.finer)
+
+signal.strength.comb.dt.finer.grid <- rbindlist(list(MA.signal.strength.finer,
+                                                     ME.signal.strength.finer,
+                                                     MI.signal.strength.finer))
+
+
+# calculate tile centroid for each tile on the finer grid
+area.reduced.contour <- area$area.finer.grid.sf %>% 
+  dplyr::select(tile.id.num = tile.id) %>% 
+  mutate(lon = map_dbl(geometry, ~st_centroid(.x)[[1]]),
+         lat = map_dbl(geometry, ~st_centroid(.x)[[2]]))
+
+# set the coordinate reference system
+crs.set <- st_crs(area.reduced.contour)
+
+# compute the antenna specfic broadcasting profile contour
+# define two categories: contour of signal dominance values below or equal to 0.5 and above 0.5 resulting later in two contour lines per antenna
+contour.data.raw <- signal.strength.comb.dt.finer.grid %>%
+  as_tibble() %>%
+  mutate(tile.id.num = as.numeric(rid)) %>%
+  mutate(cell.chr = as.character(cell)) %>%
+  left_join(cellplan.combined, by = c("cell.chr" = "cell")) %>% 
+  filter(!s < dominance.th) %>% 
+  mutate(s.discrete = case_when(s <= 0.5 ~ 1,
+                                s > 0.5 ~ 2)) %>% # define categoristation of contours
+  dplyr::select(cell, cell.kind, x.tow = x, y.tow = y, direction, tile.id.num, s, s.discrete) %>% 
+  left_join(area.reduced.contour, by = c("tile.id.num")) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = crs.set) 
+
+# split according to layer
+contour.data.raw.split <- contour.data.raw %>% 
+  st_drop_geometry() %>% 
+  split(.$cell.kind) %>% 
+  map(~distinct(., cell, x.tow, y.tow))
+
+# summarise antenna specific contour as polygon and then compute the convex hull to result in simple contour line
+contour.data.summary <- contour.data.raw %>% 
+  dplyr::select(cell, cell.kind, s.discrete, s) %>% 
+  dplyr::group_by(cell, cell.kind, s.discrete) %>%
+  dplyr::summarise() %>%
+  st_convex_hull()
+```
+
+```{r contour-MA, fig.cap="Coverage Contour of Macro cells, showing the area with less or equal than 0.5 signal dominance"}
+(contour.complete.MA <- contour.data.summary %>% 
+  filter(cell.kind == "MA" & s.discrete == "1") %>% 
+  ggplot() +
+  geom_sf(data = area$area.union) +
+  geom_sf(color = "red", fill = "transparent") +
+  geom_point(data = contour.data.raw.split$MA, aes(x = x.tow, y = y.tow), color = "black", shape = 2) +
+  theme_minimal() +
+  labs(x = "", y = ""))
+ggsave("Plots/contour.complete.MA.finer.png", contour.complete.MA, device = "png")
+```
+
+```{r contour-ME, fig.cap="Coverage Contour of Meso cells, showing the area with less or equal than 0.5 signal dominance"}
+(contour.complete.ME <- contour.data.summary %>% 
+  filter(cell.kind == "ME" & s.discrete == "1") %>% 
+  ggplot() +
+  geom_sf(data = area$area.union) +
+  geom_sf(color = "red", fill = "transparent") +
+  geom_point(data = contour.data.raw.split$ME, aes(x = x.tow, y = y.tow), color = "blue", shape = 2) +
+  theme_minimal() +
+  labs(x = "", y = ""))
+ggsave("Plots/contour.complete.ME.finer.png", contour.complete.ME, device = "png")
+
+```
+
+```{r contour-MI, fig.cap="Coverage Contour of Micro cells, showing the area with less or equal than 0.5 signal dominance"}
+(contour.complete.MI <- contour.data.summary %>% 
+  filter(cell.kind == "MI" & s.discrete == "1") %>% 
+  ggplot() +
+  geom_sf(data = area$area.union) +
+  geom_sf(color = "red", fill = "transparent") +
+  geom_point(data = contour.data.raw.split$MI, aes(x = x.tow, y = y.tow), color = "green", shape = 2) +
+  theme_minimal() +
+  labs(x = "", y = ""))
+ggsave("Plots/contour.complete.MI.finer.png", contour.complete.MI, device = "png")
+```
+
+```{r contour-certain, fig.cap="Coverage Contour of a sample cell of each layer, showing the discretized signal dominance (cell profile)"}
+
+(contour.certain <- contour.data.summary %>% 
+  filter(str_detect(cell, "MA.12.|ME.100.|MI.18.")) %>% 
+  ggplot() +
+  geom_sf(data = area$area.union) +
+  geom_sf(aes(color = factor(s.discrete)), fill = "transparent") +
+  geom_point(data = contour.data.raw.split$MA, aes(x = x.tow, y = y.tow), color = "black", shape = 2) +
+  geom_point(data = contour.data.raw.split$ME, aes(x = x.tow, y = y.tow), color = "blue", shape = 2) +
+  geom_point(data = contour.data.raw.split$MI, aes(x = x.tow, y = y.tow), color = "green", shape = 2) +
+  scale_color_discrete("Signal dom.", breaks = c("1", "2"), labels = c("0.05 <= s < 0.5",
+                                                                      "s >= 0.5")) +
+  theme_minimal() +
+  labs(x = "", y = ""))
+ggsave("Plots/hull.certain.finer.png", contour.certain, device = "png")
+
+```
+
+The following chunks visualize different views on antenna coverage, specific for each layer.
+
+```{r coverage-kind-setup}
+# maximum of two rows per tile, tiles with only one row, mean they are only covered by one cell.kind
+signal.strength.summary.ck <- signal.strength.summary.helper %>% 
+  group_by(tile.id, cell.kind) %>%
+  summarise(cell.count = n(),
+            max.dBm = max(dBm),
+            max.s = max(s),
+            min.dist = min(dist)) %>% 
+  mutate(cell.count.complete = sum(cell.count),
+         max.dBm.complete = max(max.dBm),
+         max.s.complete = max(max.s), 
+         min.dist.complete = max(min.dist)) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = -c(tile.id, cell.kind),
+               names_to = "kind", 
+               values_to = "values") # possibly different pivot to get "kind" into multiple variables
+```
+
+```{r histogram-cells, fig.cap="The number of cells a tile is covered by, in total and per cell layer"}
+# histogram cells
+(tile.coverage.hist <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "count")) %>% 
+  mutate(cat = case_when(str_detect(kind, pattern = "complete") ~ "complete",
+                         TRUE ~ paste0(cell.kind))) %>% 
+  distinct(tile.id, cat, .keep_all = T) %>% 
+  dplyr::select(-cell.kind) %>% 
+  ggplot() +
+  geom_histogram(aes(values), binwidth = 1) +
+  # scale_x_continuous(breaks = seq(0, 12, 1)) + # respecify to be dynamic
+  facet_grid(~cat) +
+  labs(title = "Number of cells a tile is covered by",
+       y = "Tile count",
+       x = "Number of cells"))
+```
+
+```{r coverage-map-dfs}
+coverage.map.dom.df.MA <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "max.s")) %>% 
+  mutate(cat = case_when(str_detect(kind, pattern = "complete") ~ "complete",
+                         TRUE ~ paste0(cell.kind))) %>% 
+  filter(cat == "MA") %>% 
+  dplyr::select(-cell.kind) %>% 
+  mutate(tile.id.num = as.numeric(tile.id)) %>% 
+  full_join(area$area.sf, by = c("tile.id.num" = "tile.id")) %>%  # change later on
+  mutate(missing = case_when(is.na(values) ~ 1,
+                             TRUE ~ 0)) %>% 
+  st_as_sf()
+
+coverage.map.dom.df.ME <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "max.s")) %>% 
+  mutate(cat = case_when(str_detect(kind, pattern = "complete") ~ "complete",
+                         TRUE ~ paste0(cell.kind))) %>% 
+  filter(cat == "ME") %>% 
+  dplyr::select(-cell.kind) %>% 
+  mutate(tile.id.num = as.numeric(tile.id)) %>% 
+  full_join(area$area.sf, by = c("tile.id.num" = "tile.id")) %>%  # change later on
+  mutate(missing = case_when(is.na(values) ~ 1,
+                             TRUE ~ 0)) %>% 
+  st_as_sf()
+
+coverage.map.dom.df.MI <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "max.s")) %>% 
+  mutate(cat = case_when(str_detect(kind, pattern = "complete") ~ "complete",
+                         TRUE ~ paste0(cell.kind))) %>% 
+  filter(cat == "MI") %>% 
+  dplyr::select(-cell.kind) %>% 
+  mutate(tile.id.num = as.numeric(tile.id)) %>% 
+  full_join(area$area.sf, by = c("tile.id.num" = "tile.id")) %>%  # change later on
+  mutate(missing = case_when(is.na(values) ~ 1,
+                             TRUE ~ 0)) %>% 
+  st_as_sf()
+
+coverage.map.dom.df.complete <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "max.s")) %>% 
+  mutate(cat = case_when(str_detect(kind, pattern = "complete") ~ "complete",
+                         TRUE ~ paste0(cell.kind))) %>% 
+  filter(cat == "complete") %>% 
+  distinct(tile.id, cat, .keep_all = T) %>% 
+  dplyr::select(-cell.kind) %>% 
+  mutate(tile.id.num = as.numeric(tile.id)) %>% 
+  full_join(area$area.sf, by = c("tile.id.num" = "tile.id")) %>%  # change later on
+  mutate(missing = case_when(is.na(values) ~ 1,
+                             TRUE ~ 0)) %>% 
+  st_as_sf()
+```
+
+```{r coverage-map-MA, fig.cap="Actual coverage heatmap for Macro cells"}
+(coverage.map.MA <- coverage.map.dom.df.MA %>% 
+    ggplot() +
+    geom_sf(aes(fill = values), color = "transparent") +
+    geom_point(data = as_tibble(MA.cellplan.val$cellplan.val), aes(x, y),
+               shape = 2, color = "#F8766D") +
+    scale_fill_gradient(low = "white", high = "black", na.value = "red", 
+                        limits = c(0, 1)) +
+    labs(title = "MA Coverage", 
+         fill = "Signal Dominance",
+         x = "",
+         y = "") +
+    theme_minimal() +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"),
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          legend.position = "none"))
+```
+
+```{r coverage-map-ME, fig.cap="Actual coverage heatmap for Meso cells"}
+(coverage.map.ME <- coverage.map.dom.df.ME %>% 
+    ggplot() +
+    geom_sf(aes(fill = values), color = "transparent") +
+    geom_point(data = as_tibble(ME.cellplan.val$cellplan.val), aes(x, y),
+               shape = 2, color = "#00BFC4") +
+    scale_fill_gradient(low = "white", high = "black", na.value = "red", 
+                        limits = c(0, 1)) +
+    labs(title = " ME Coverage", 
+         fill = "Signal Dominance",
+         x = "",
+         y = "") +
+    theme_minimal() +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"),
+          legend.position = "none",
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()))
+
+
+```
+
+```{r coverage-map-MI, fig.cap="Actual coverage heatmap for Micro cells"}
+(coverage.map.MI <- coverage.map.dom.df.MI %>% 
+    ggplot() +
+    geom_sf(aes(fill = values), color = "transparent") +
+    geom_point(data = as_tibble(MI.cellplan.val$cellplan.val), aes(x, y),
+               shape = 2, color = "#00BFC4") +
+    scale_fill_gradient(low = "white", high = "black", na.value = "red", 
+                        limits = c(0, 1)) +
+    labs(title = " MI Coverage", 
+         fill = "Signal Dominance",
+         x = "",
+         y = "") +
+    theme_minimal() +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"),
+          legend.position = "none",
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()))
+```
+
+```{r coverage-map-complete, fig.cap="Actual coverage heatmap for all cells"}
+
+(coverage.map.complete <- coverage.map.dom.df.complete %>% 
+    ggplot() +
+    geom_sf(aes(fill = values), color = "transparent") +
+    geom_point(data = cellplan.combined, aes(x, y, color = cell.kind),
+               shape = 2) +
+    scale_fill_gradient(low = "white", high = "black", na.value = "red", 
+                        limits = c(0, 1)) +
+    labs(title = "Complete coverage", 
+         color = "Tower kind",
+         fill = "Signal Dominance",
+         x = "",
+         y = "") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()))
+```
+
+```{r coverage-multinomial-setup}
+coverage.map.dom.df.binary <- signal.strength.summary.ck %>%
+  filter(str_detect(kind, pattern = "max.s"),
+         !str_detect(kind, pattern = "complete")) %>%
+  group_by(tile.id) %>%
+  # mutate(values = round(values, 2)) %>%
+  filter(values == max(values)) %>%
+  ungroup() %>%
+  mutate(tile.id.num = as.numeric(tile.id)) %>%
+  full_join(area$area.sf, by = c("tile.id.num" = "tile.id")) %>%  # change later on
+  mutate(missing = case_when(is.na(values) ~ 1,
+                             TRUE ~ 0)) %>%
+  st_as_sf()
+```
+
+```{r coverage-multinomial-map, fig.cap=""}
+(coverage.map.binary <- coverage.map.dom.df.binary %>%
+    ggplot() +
+    geom_sf(aes(fill = cell.kind), color = "transparent", alpha = 0.3, show = FALSE) +
+    geom_point(data = cellplan.combined, aes(x, y, color = cell.kind),
+               shape = 2) +
+    labs(title = "Maximum coverage categorized by cell layer",
+         color = "Cell kind",
+         x = "",
+         y = "") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()))
+```
+
+## Toyworld Generation: Device to cell association
+
+This subchapter refers to the final task in the toyworld generation: the device to cell association. Here we bring the population with the network together and stochastically assign the mobile phone population in each tile to the respective antennas. The result is the so-called c-vector, which describes the number of mobile phones assigned to each cell. The basis parameter for this assignment is the signal dominance which is normalized in the form of a conditional probability. These conditional probabilities describe the elements of the P.matrix, which is the main model to estimate (geolocation module).
+
+```{r dev-to-cell}
+# specify the option of differing parameters for sig_d_th and max_overlapping_cells depending on the cell type in custom create_strength_llh function
+
+# Workaround: securing that sig_d_th and max_overlapping_cells are the same for each layer
+signal.strength.llh.param <- list(sig_d_th = max(cellplan.combined.reduced$dominance.th),
+                                  max_overlapping_cells = 100)
+
+# defining the connection probability
+signal.strength.llh.combined <- create_strength_llh(strength = signal.strength.comb.dt, 
+                                                    param = signal.strength.llh.param) %>% 
+  as_tibble() %>% 
+  mutate(tile.id = rid) %>% 
+  group_by(tile.id) %>%
+  mutate(pij = smart_round(pag, 3)) %>% # round values to the third decimal and assuring that all columns (tiles) add up to 1 (column stocahsticity)
+  ungroup() %>%
+  left_join(area$area.df, by = "tile.id") %>% 
+  mutate(coverage.kind = case_when(pop == 0 ~ "0 population",
+                                   pij == 1 ~ "covered completely by one antenna",
+                                   pij > 0 & pij < 1 ~ "covered by multiple antennas",
+                                   pij == 0 ~ "tile covered unsufficiently")) %>% 
+  dplyr::select(-pag)
+
+# aggregating and specifying the tiles that are uncovered (if there are some)
+tiles.cat <- signal.strength.llh.combined %>% 
+  filter(!pij == 0) %>% 
+  dplyr::select(tile.id, coverage.kind) %>% 
+  group_by(tile.id) %>% 
+  summarise(count = n())
+
+# how many tiles are not sufficiently covered
+missings <- anti_join(area$area.df, tiles.cat, by = "tile.id") # implement non zero pop
+paste("Number of tiles which are unsufficiently covered:", length(missings$tile.id))
+
+# covered only by one tile
+C.vec.fixed.helper <- signal.strength.llh.combined %>% 
+  filter(coverage.kind == "covered completely by one antenna") %>%
+  dplyr::select(tile.id, cell, pop)
+
+# One object where tiles are covered by multiple cells
+C.vec.multiple.helper <- signal.strength.llh.combined %>% 
+  filter(coverage.kind == "covered by multiple antennas") %>% 
+  group_split(tile.id) 
+
+# Calculate the number of cores for paralized process
+no_cores <- availableCores() - 1
+plan(multisession, workers = no_cores)
+
+# Sampling mobile phones within tiles to cells depending on connection probability
+# parallized process
+C.vec.multiple <- C.vec.multiple.helper %>% 
+  future_map(~sample(x = .$cell, mean(.$pop),
+                     replace = T, prob = .$pij), 
+             .options = furrr_options(seed = T), .progress = T) %>% 
+  future_map(as_tibble, .id = "tile.id", .progress = T) %>% 
+  future_map(~group_by(., value), .progress = T) %>% 
+  future_map(~summarise(., pop.count.rand = n(), .groups = "drop"), 
+             .progress = T)
+
+# pulling all c-vec helper objects together and develop final c-vec dataframe
+C.vec.df <- C.vec.multiple %>% 
+  bind_rows() %>% 
+  dplyr::select(cell = value, pop = pop.count.rand) %>% 
+  bind_rows(C.vec.fixed.helper) %>% 
+  group_by(cell) %>% 
+  summarise(phones.sum = sum(pop))
+```
+
+```{r c-vec-distribution, fig.cap="noch als ECCDF einfügen"}
+# log scale breaks for background grid
+minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
+
+# develop c-vec dataset for plotting eccdf and ecdf
+c.vec.density.data <- C.vec.df %>% 
+    mutate(c.plot = phones.sum + 1) %>%  
+    arrange(c.plot) %>%  
+    mutate(prob = 1 / n()) %>%  
+    mutate(cum.prob = cumsum(prob)) %>%  
+    mutate(cum.prob.comp = 1 - cum.prob) %>%  
+    dplyr::select(cum.prob.comp, c.plot) 
+
+# ECCDF plot c-vec
+c.vec.eccdf <- c.vec.density.data %>% 
+    ggplot() +
+    geom_point(aes(x = c.plot, y = cum.prob.comp)) +
+    scale_y_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    scale_x_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    annotation_logticks(sides = "lb") +
+    labs(title = "Number of phones a cell has registered (ECCDF and ECDF)",
+         y = "log(ECCDF)",
+         x = "Number of phones")
+
+# ECDF plot c-vec
+c.vec.ecdf <- c.vec.density.data %>%   
+  ggplot() + 
+  geom_point(aes(x = c.plot, y = cum.prob.comp)) + 
+  labs(title = "", y = "", x = "") +
+  theme(legend.position = "none",
+        plot.margin = unit(c(-0.5, 0, 0, -0.5), "cm")) 
+
+
+(combined.c.vec <- c.vec.eccdf +
+  annotation_custom(ggplotGrob(c.vec.ecdf), 
+                    xmin = 0.2, xmax = 3, 
+                    ymin = -2.8, ymax = -1))
+ggsave("Plots/histogram.c.vec.png", combined.c.vec, device = "png")
+```
+
+In the following code chunk we are specifying the P matrix, with tiles as columns, antennas as rows and antenna-tile relationships as the elements. This matrix can be described as the connection probability. Each column adds up to 1, meaning it is column stochastic. This particular version of the connection probability can be described as exact, as it represents the same information which is used for the data generating mechanism in the development of the toyworld. We will define a copy of the P matrix, which will be called P\* (P.star) and describes the modelling parameter necessary for all estimators, excluding the Voronoi estimators.
+
+Furthermore, in the following code chunk we implement the process of consolidation a.k.a. the development of super tiles. These are tiles in the P matrix that are indistinguishable from each other based on their relationships to antennas (i.e. columns in the P matrix that are exactly the same). These tiles will yield in all estimators the exact same value, therefore, to reduce computational resources, they can be consolidated to supertiles and afterwards disaggregated again.
+
+```{r P-matrix}
+# develop long format of P matrix which also contains certain cellplan parameters and "zero elements"
+# develop different versions of id variables (tile and antennas) for easier joining
+P.long.complete.df <- full_join(signal.strength.llh.combined, C.vec.df, by = "cell") %>% 
+  # dplyr::select(tile.id, pop, elevation, cell, type, dist, pij, phones.sum) %>% 
+  dplyr::select(tile.id, pop, cell, type, dist, pij, phones.sum) %>% 
+  mutate(tile.id.chr = tile.id) %>% 
+  mutate(tile.id = factor(tile.id)) %>% 
+  mutate(tile.id.num = as.numeric(tile.id)) %>% 
+  mutate(cell.num = as.numeric(cell)) %>% 
+  mutate(cell.chr = as.character(cell))
+
+# Long format of P matrix with minimal variables and and unique rows
+P.long.df <- P.long.complete.df %>% 
+  dplyr::select(tile.id, tile.id.num, tile.id.chr, cell, cell.num, cell.chr, pij) %>% 
+  distinct()
+
+# Sparse matrix version of P matrix
+P.mat <- sparseMatrix(i = P.long.df$cell.num, 
+                      j = P.long.df$tile.id.num, 
+                      x = P.long.df$pij)
+
+
+# Workflow for consolidating regular tiles to supertiles based on P matrix
+P.star.supertile.helper <- P.long.df %>% 
+  dplyr::select(tile.id.chr, cell.chr, pij) %>% 
+  filter(!pij == 0) %>% # assure that no "non-zero" elements are present
+  group_by(tile.id.chr) %>% 
+  arrange(cell.chr) %>% 
+  mutate(cell.comp = paste0(cell.chr, collapse = ""),
+         pij.comp = paste0(pij, collapse = "")) %>% # develop variables that contain character version of all cell names and all connection probabilities (order matters!!!)
+  ungroup() %>% 
+  group_by(cell.comp, pij.comp) %>% # group by these two variables to find tile that are identical in terms of the P matrix
+  mutate(supertile.id = cur_group_id()) %>% # define the new supertile id
+  ungroup() %>% 
+  mutate(supertile.id = factor(supertile.id)) %>% 
+  mutate(supertile.id.num = as.numeric(supertile.id)) %>% 
+  mutate(supertile.id.chr = as.character(supertile.id)) %>% 
+  right_join(P.long.df, by = c("tile.id.chr", "cell.chr")) %>% 
+  dplyr::select(tile.id, tile.id.num, tile.id.chr, supertile.id, supertile.id.num, supertile.id.chr, 
+                cell, cell.num, cell.chr, pij = pij.x) %>% 
+  filter(!is.na(pij)) 
+
+# develop joiner object for knowing which regular tiles are within a supertile
+P.star.supertile.joiner <- P.star.supertile.helper %>%  
+  distinct(tile.id.num, supertile.id, supertile.id.num, supertile.id.chr) %>% 
+  arrange(tile.id.num) 
+
+# define P matrix on the supertile level
+P.star.supertile.long.df <- P.star.supertile.helper %>%
+  distinct(supertile.id, supertile.id.num, supertile.id.chr, cell, cell.num, cell.chr, pij) %>% 
+  arrange(cell.num)
+
+# append supertile id to sim area base objects
+area$area.sf.complete <- area$area.sf %>% 
+  left_join(P.star.supertile.joiner, by = c("tile.id" = "tile.id.num"))
+area$area.df.complete <- area$area.df %>% 
+  left_join(P.star.supertile.joiner, by = c("tile.id" = "tile.id.num"))
+```
+
+# Estimation
+
+In the Estimation part we configure all necessary parameters for the defined estimators in the main paper. At the end, all final estimates are bounded together in one dataset on the tile level.
+
+## Estimation: Setup
+
+Here we specify the connection probability models. In this case P = P\*. Furthermore, we define the c-vector, which contains the number of mobile phones an antenna has connected to and the prior vector, which is a constant for each tile (here 1). For the following estimator functions the parameters are assumed to be in a `datatable` format or sparse Matrix via `sparseMatrix`.
+
+```{r}
+# Modelling true P with P* (P.star)
+P.star.dt <- P.long.df %>% 
+  dplyr::select(i = cell.num, j = tile.id.num, pij) %>% 
+  as.data.table()
+
+# P* on the supertile level as sparse matrix version
+P.star.supertile.spm <- sparseMatrix(i = P.star.supertile.long.df$cell.num, 
+                                     j = P.star.supertile.long.df$supertile.id.num,
+                                     x = P.star.supertile.long.df$pij)
+
+# P* on the supertile level as datatable version
+P.star.supertile.dt <- data.table(i = P.star.supertile.long.df$cell.num,
+                                  j = P.star.supertile.long.df$supertile.id.num,
+                                  pij = P.star.supertile.long.df$pij)
+
+### C vector, adding antennas that have 0 phones to complete the vector, arranging it according to the antenna.ID and saving as vector
+c.vec <- P.long.complete.df %>% 
+  distinct(cell, cell.num, cell.chr, phones.sum) %>% 
+  right_join(cellplan.combined, by = "cell") %>% 
+  mutate(phones.sum = case_when(is.na(phones.sum) ~ 0,
+                                TRUE ~ phones.sum)) %>% 
+  arrange(cell.num)
+
+# define c-vector in datatable version
+c.vec.dt <- data.table(i = c.vec$cell.num,
+                       c = c.vec$phones.sum)
+
+
+### prior vectors
+a.tile.helper <- P.long.complete.df %>% 
+  mutate(a = 1) %>% 
+  distinct(tile.id.num, a)
+
+# define datatable version of constant prior
+a.tile.dt <- data.table(j = a.tile.helper$tile.id.num, u = a.tile.helper$a)
+
+# define constant prior on the supertile level
+a.supertile.helper <- P.star.supertile.joiner %>% 
+  group_by(supertile.id.num) %>% 
+  summarise(a = n()) %>% 
+  ungroup() %>% 
+  distinct(supertile.id.num, a) %>% 
+  deframe()
+```
+
+## Estimation: Voronoi (Tower, Offset, Barycenter)
+
+Here we define 3 options of the Voronoi estimator. An option always corresponds to the seed that is used to compute the Voronoi region. Each Voronoi estimator needs the c-vector and the cellplan as main parameters.
+
+The first option is called "tower", which disregards antennas and only uses tower locations as seeds. Therefore, the c-vector is aggregated on the tower level.
+
+```{r vor-tower, fig.cap="Voronoi regions with tower locations as seeds"}
+# Voronoi estimation with tower locations as seeds
+VOR.tower <- VOR_est(area = area, 
+                     cellplan.combined = cellplan.combined, 
+                     signal.strength.comb.dt = signal.strength.comb.dt, 
+                     C.vec.df = C.vec.df, 
+                     seed = "tower")
+VOR.tower.est <- VOR.tower$seed.voronoi.final %>% 
+  rename(u.VOR.tower = u.VOR)
+
+# print
+VOR.tower$Voronoi.regions.plot
+
+# save
+ggsave("Plots/VOR_regions_tower.png", VOR.tower$Voronoi.regions.plot, device = "png")
+```
+
+The second option is defined on the antenna level and uses the location of each antenna (which is the same for each antenna of the same tower) plus an adjustable offset into the broadcasting direction of the respective antenna (which results in a different location for each antenna of the same tower). Here the offset is 10m.
+
+```{r vor-offset, fig.cap="Voronoi regions with antenna offsets as seeds"}
+# Voronoi estimation with cell locations + offset as seeds
+VOR.offset <- VOR_est(area = area, 
+                      cellplan.combined = cellplan.combined, 
+                      signal.strength.comb.dt = signal.strength.comb.dt, 
+                      C.vec.df = C.vec.df, 
+                      seed = "cell.offset",
+                      offset = 10) 
+VOR.offset.est <- VOR.offset$seed.voronoi.final %>% 
+  rename(u.VOR.offset = u.VOR)
+
+# print
+VOR.offset$Voronoi.regions.plot
+
+# save
+ggsave("Plots/VOR_regions_offset.png", VOR.offset$Voronoi.regions.plot, device = "png")
+```
+
+The third option is also on the antenna level and uses the barycenter of each antenna as seed location for the computation of Voronoi regions.
+
+```{r vor-barycenter, fig.cap="Voronoi regions with antenna barycenters as seeds"}
+# Voronoi estimation with cell barycenter locations as seeds
+VOR.barycenter <- VOR_est(area = area, 
+                          cellplan.combined = cellplan.combined, 
+                          signal.strength.comb.dt = signal.strength.comb.dt, 
+                          C.vec.df = C.vec.df, 
+                          seed = "cell.barycenter") 
+VOR.barycenter.est <- VOR.barycenter$seed.voronoi.final %>% 
+  rename(u.VOR.barycenter = u.VOR)
+
+# print
+VOR.barycenter$Voronoi.regions.plot
+
+# save
+ggsave("Plots/VOR_regions_barycenter.png", VOR.barycenter$Voronoi.regions.plot, device = "png")
+```
+
+## Estimation: Simple Bayes
+
+The Simple Bayes (SB) estimator needs three parameters, the c-vector, an connection probability model (P\*) and a prior vector. The following custom R-function (`EM_est()`) is basically the same for the MLE Poisson and SB estimator. The only difference is that the SB estimator uses only one (i.e. the first) iteration. Furthermore, this function contains a parameter `ldt`, which can potentially reduce the iterations until convergence. It clips all estimates below this value to exactly 0 as the original estimator could not reach exactly 0. Most parameters are assumed on the `datatable` format for computational speed purposes.
+
+```{r SB-estimator}
+# caclulate SB estimator
+SB.est <- EM_est(c.vec.dt = c.vec.dt, 
+                 P.dt = P.star.dt, 
+                 a.vec.dt = a.tile.dt, 
+                 selected.range = 1,
+                 n.iter = 1,
+                 message = F, 
+                 ldt = 10^-04) %>% 
+  dplyr::rename(tile.id = j, prior.SB = i.u, u.SB = u1)
+```
+
+## Estimation: MLE Poisson
+
+The MLE Poisson estimator assumes the same parameters as the SB estimator, plus the number of iterations it should run. For convenience, `EM_est()` contains the argument `selected.range`, which gives the user the option to specify which iterations should be delivered in the output data frame.
+
+```{r MLE-Poisson-estimator}
+# define number of iterations 
+n.iter.MLE <- 200
+
+# Time log
+MLE.time <- system.time({
+  # calculate MLE Poisson estimator
+  MLE.est <- EM_est(c.vec.dt = c.vec.dt, 
+                    P.dt = P.star.dt, 
+                    a.vec.dt = a.tile.dt, 
+                    selected.range = c(1:10, seq(20, 90, 10), seq(100, 200, 50)),
+                    n.iter = n.iter.MLE,
+                    message = F, 
+                    ldt = 10^-04) %>% 
+    rename_with(.fn = ~gsub("u", "u.MLE", x = .x, fixed = T), 
+                .cols = starts_with("u")) %>% 
+    rename(tile.id = j, prior.MLE = i.u)
+})
+
+```
+
+One MLE iteration takes for this toyworld and the specified configurations on average ca. `r paste(round(MLE.time[[3]] / n.iter.MLE), 0)` seconds.
+
+## Estimation: DF
+
+The DF estimator also assumes the same parameters as the SB and MLE-Poisson estimator, however, it is computed on the supertile level. The necessary matrix inversion is computed via the Moore Penrose inverse. Given the fact that the raw DF estimate can contain negative values, it is adjusted and renormalized in the following way: All estimate values below 1 are clipped at 1 and then one iteration with `EM_est()` is conducted in order to assure that the final estimates are of the same mass as the c-vector. Therefore, the DF estimator is the raw DF estimate after one iteration (DF1).
+
+As another configuration, this notebook contains an adjusted MLE Poisson estimator, where the prior vector is the adjusted and renormalized DF estimate vector. This is coined in the following as DF200 which means that contains the estimates after 200 iterations.
+
+```{r DF-estimator}
+# Time log
+DF.raw.time <- system.time({
+  # calculate raw DF estimates with supertiles
+  DF.raw.est <- DF_est(c.vec.dt = c.vec.dt, 
+                       P.star.spm = P.star.supertile.spm, 
+                       a.supertile.vec = a.supertile.helper)
+  # adjust raw DF estimate (clip)
+  DF.raw.est.dt <- data.table(j = as.numeric(names(a.supertile.helper)),
+                              u = DF.raw.est) %>%
+    .[, u := fifelse(u < 1, 1, u)] # clip lower values than 1 to 1
+})
+
+## Renormalizing with EM and bringing estimate on regular tile.id level
+DF.est <- EM_est(c.vec.dt = c.vec.dt, 
+                 P.dt = P.star.supertile.dt, 
+                 a.vec.dt = DF.raw.est.dt,
+                 selected.range = c(1:10, seq(20, 90, 10), seq(100, 200, 50)),
+                 n.iter = n.iter.MLE,
+                 message = F,
+                 ldt = 10^-04) %>% 
+  rename_with(.fn = ~gsub("u", "u.DF", x = .x, fixed = T), 
+              .cols = starts_with("u")) %>% 
+  rename(supertile.id.num = j, prior.DF = i.u) %>%
+  right_join(area$area.df.complete, by = "supertile.id.num") %>% 
+  group_by(supertile.id) %>% 
+  mutate(across(starts_with("u"), ~ . / n())) %>% 
+  ungroup() %>% 
+  dplyr::select(tile.id, starts_with("u"))
+```
+
+Computing the raw DF-estimate (renormalized but without further MLE iterations) takes for this toyworld and the specified configurations ca. `r paste(round(DF.raw.time + (MLE.time[[3]] / n.iter.MLE), 0))` seconds.
+
+# Evaluation
+
+The last part of this notebook follows through with evaluating the different estimators based on the following indicators: 1d density, 2d density, Spatial density (i.e., geographical maps), KWD, and Convergence based on KWD.
+
+## Evaluation: Setup
+
+```{r evaluation-setup}
+# putting everything into an sf-dataframe together
+final.estimates.sf <- area$area.sf %>% 
+  left_join(VOR.tower.est, by = "tile.id") %>% 
+  left_join(VOR.offset.est, by = "tile.id") %>% 
+  left_join(VOR.barycenter.est, by = "tile.id") %>% 
+  left_join(SB.est, by = "tile.id") %>%
+  left_join(MLE.est, by = "tile.id") %>% 
+  left_join(DF.est, by = "tile.id")
+
+# non-sf version
+final.estimates.df <- final.estimates.sf %>% 
+  st_drop_geometry()
+
+# vector with names of the relevant estimates
+names.estimates <- final.estimates.sf %>% 
+  # dplyr::select(pop, starts_with("u.")) %>% # all estimates
+  dplyr::select(pop, matches("VOR|u.SB|DF1$|200")) %>% # only "final" ones for mapping
+  st_drop_geometry() %>% 
+  names() 
+```
+
+## Evaluation: 1d Density
+
+```{r 1d-density, warning=FALSE, fig.cap="Comparing ECCDF of estimates to the GTP"}
+# calculate density dataset for all estimates and GTP 
+cdf.compare <- final.estimates.df %>% 
+  dplyr::select(tile.id, all_of(names.estimates)) %>% 
+  pivot_longer(cols = -tile.id, names_to = "estimates", values_to = "values") %>% 
+  split(.$estimates) %>% 
+  map(~custom_ecdf_prep(.)) %>% 
+  map(~dplyr::select(., cum.prob.comp, pop.plot)) %>%
+  map(~mutate(., cum.prob.comp = round(cum.prob.comp, 3))) %>% # effective plot sample --> faster plotting excluding overplot
+  map_dfr(~distinct(.), .id = "type")
+## Warning in mask$eval_all_mutate(quo): NANs can be present
+
+
+# ECCDF plot
+(ECCDF.pop.plot <- cdf.compare %>% 
+    ggplot() + 
+    geom_line(aes(x = pop.plot, y = cum.prob.comp,
+                  color = type), size = 1) + 
+    scale_color_ptol() +
+    scale_y_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    scale_x_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    annotation_logticks(sides = "lb") +
+    labs(title = "ECCDF of estimators and GTP", y = "log10(ECCDF)", x = "log10(Mobile phones)",  
+         colour = "") +
+    theme(legend.position = "bottom"))
+
+ggsave("Plots/eccdf.estimates.png", ECCDF.pop.plot, device = "png")
+```
+
+## Evaluation: 2d Density
+
+```{r 2d-density, warning=FALSE, message=FALSE}
+# names of specified estimators for order control
+names.order.estimator <- c("u.flat", 
+                           "u.VOR.tower", "u.VOR.offset", "u.VOR.barycenter",
+                           "u.SB",
+                           "u.MLE", 
+                           "u.DF")
+
+# define additional necessary rescalings of the area (next to 1x1)
+rescale.factor.list <- list(area.1x1 = 1,
+                            area.2x2 = 2, 
+                            area.4x4 = 4, 
+                            area.8x8 = 8)
+
+# aggregate estimate values based on rescaling level
+area.rescaled.grid <- map(rescale.factor.list, 
+                          ~st_make_grid(area$area.sf, cellsize = area$area.params[["base.tile.size"]] * .x))
+
+# define relevant estimates
+mse.relevant.estimators <- final.estimates.sf %>% 
+  dplyr::select(tile.id, pop, matches("VOR|SB|flat|1|10|100|200")) %>% 
+  dplyr::select(-matches("prior"))
+
+# develop a list element with grid aggregated values
+mse.est <- map(area.rescaled.grid, ~aggregate(mse.relevant.estimators, by = .x, FUN = mean, join = st_contains)) %>% 
+  map(~st_drop_geometry(.))
+
+# define data frame with the necessary variables for visualization of estimate vs. GTP
+point <- mse.est %>% 
+  map(~mutate(., tile.id.rescaled = row_number())) %>% 
+  map(~dplyr::select(., tile.id.rescaled, pop, starts_with("u."))) %>% 
+  map_dfr(~pivot_longer(., cols = -c(tile.id.rescaled, pop), 
+                        names_to = "estimator", values_to = "estimate"), .id = "scale") %>% 
+  mutate(rescale.factor = as.numeric(str_extract(scale, "[[:digit:]]")),
+         iteration = str_extract(estimator, "[[:digit:]]+"),
+         kind = str_extract(estimator, "[[:alpha:][:punct:]]+")) %>% 
+  mutate(iteration = case_when(is.na(iteration) ~ 0,
+                               TRUE ~ as.numeric(iteration))) %>% 
+  mutate(estimator.ordered = factor(kind, levels = names.order.estimator))
+
+
+# selected estimators (iterations) for 2d density plots
+scatter.names <- c("u.MLE1", "u.MLE10", "u.MLE100", "u.MLE200",
+                   "u.VOR.barycenter", "u.VOR.tower")
+
+# custom 2d density plots
+scatter.density.plots <- scatter.names %>% 
+  map(~scatter_density(point, estimator.name = .x)) %>%
+  set_names(scatter.names)
+
+# print
+ggpubr::as_ggplot(scatter.density.plots$u.MLE1)
+ggpubr::as_ggplot(scatter.density.plots$u.MLE10)
+ggpubr::as_ggplot(scatter.density.plots$u.MLE100)
+ggpubr::as_ggplot(scatter.density.plots$u.MLE200)
+ggpubr::as_ggplot(scatter.density.plots$u.VOR.barycenter)
+ggpubr::as_ggplot(scatter.density.plots$u.VOR.tower)
+
+# save
+ggsave("Plots/u.MLE1.2d.density.png", scatter.density.plots$u.MLE1, device = "png")
+ggsave("Plots/u.MLE10.2d.density.png", scatter.density.plots$u.MLE10, device = "png")
+ggsave("Plots/u.MLE100.2d.density.png", scatter.density.plots$u.MLE100, device = "png")
+ggsave("Plots/u.MLE200.2d.density.png", scatter.density.plots$u.MLE200, device = "png")
+ggsave("Plots/u.VOR.barycenter.2d.density.png", scatter.density.plots$u.VOR.barycenter, device = "png")
+ggsave("Plots/u.VOR.tower.2d.density.png", scatter.density.plots$u.VOR.tower, device = "png")
+```
+
+## Evaluation: Spatial Density
+
+```{r spatial-estimates-maps, message=FALSE}
+# define legend labels for maps
+maps.labels <- list("GTP  ", 
+                    "VOR_t", "VOR_o", "VOR_b", 
+                    "SB   ", "MLE  ", "DF1  ", "DF200")
+
+# check if there is divergence, what are the maximum estimates per tile for each estimator
+max.maps <- final.estimates.sf %>% 
+  st_drop_geometry() %>% 
+  dplyr::select(tile.id, pop, matches("VOR|u.SB|DF1$|200")) %>% # only specific ones for mapping
+  summarise_all(max) %>% 
+  pivot_longer(cols = -tile.id, names_to = "estimator", values_to = "estimate")
+
+
+# Define break points for discretized spatial density plots
+breaks <- c(0, 2, 5, 10, 20, 50, 100, 200, 350, Inf)
+maps.input <- final.estimates.sf %>% 
+  dplyr::select(tile.id, pop, all_of(names.estimates)) %>% 
+  mutate(across(c(pop, starts_with("u.")), ~cut(., breaks = breaks, dig.lab = 7, right = F)))
+
+# Build maps and print
+(maps.estimation.density <- names.estimates %>%
+    map2(., maps.labels, ~map_density(data = maps.input, var = .x, label = .y)) %>%
+    set_names(names.estimates))
+
+# save
+ggsave("Plots/pop.map.png", maps.estimation.density$pop, device = "png")
+ggsave("Plots/u.VOR.tower.map.png", maps.estimation.density$u.VOR.tower, device = "png")
+ggsave("Plots/u.VOR.offset.map.png", maps.estimation.density$u.VOR.offset, device = "png")
+ggsave("Plots/u.VOR.barycenter.map.png", maps.estimation.density$u.VOR.barycenter, device = "png")
+ggsave("Plots/u.SB.map.png", maps.estimation.density$u.SB, device = "png")
+ggsave("Plots/u.MLE200.map.png", maps.estimation.density$u.MLE200, device = "png")
+ggsave("Plots/u.DF1.map.png", maps.estimation.density$u.DF1, device = "png")
+ggsave("Plots/u.DF200.map.png", maps.estimation.density$u.DF200, device = "png")
+
+```
+
+## Evaluation: KWD
+
+Computing the Kantorovitch Wassterstein Distance (KWD), a.k.a. Earth Movers Distance, is done by using the package of Prof. Stefano Gualandi `SpatialKWD`. This package is the result of the article that is referenced [here](https://epubs.siam.org/doi/abs/10.1137/19M1261195?casa_token=f2nek1tmXtgAAAAA%3AkuwTSnCg8ETBNBiazggdPcqxBycf05v94Bs1rbadLETmMgk5o5Q7_DxTIz15WYxPcVWgv2vrwQ&), which develops an computationally efficient approximation method of the KWD. The package offers the very convenient function `compareOneToMany()`, which assumes the main parameters `Coordinates`, `Weights` and `L`. The first describes the point coordinates of each tile, for which we use the centroid of each tile, the second uses the GTP and the estimates, the third parameter specifies the approximation, i.e. the accuracy of the approximated KWD. Here, we use the default (`L = 3`), which basically means that the approximation error will be in the worst case 1.29%. The output value is used as an upper bound for the KWD estimate and the worst case adjustment acts as a lower bound.
+
+This function is particularly convenient, as it allows to implement the `Weights` object to be a matrix, i.e. as many estimates can be implemented as the user wants. The first column is always assumed to be the GTP, which also acts as the reference.
+
+```{r kwd-setup}
+# develop dataframe with GTP, all estimates and tile centroids
+kwd.helper.est <- final.estimates.sf %>% 
+  dplyr::select(-c(elevation, type)) %>%
+  mutate(u.flat = mean(pop)) %>% 
+  mutate(lon = map_dbl(geometry, ~st_centroid(.x)[[1]]),
+         lat = map_dbl(geometry, ~st_centroid(.x)[[2]])) %>% 
+  st_drop_geometry()
+
+# Coordinates object
+coordinates <- kwd.helper.est %>% 
+  dplyr::select(lon, lat) %>% 
+  as.matrix()
+
+# Weights object
+weights <- kwd.helper.est %>% 
+  dplyr::select(pop, matches("u.")) %>% 
+  as.matrix()
+
+# Approximation parameter (the higher the more accurate)
+L = 3
+
+# Run KWD
+kwd.final <- compareOneToMany(coordinates, weights, L = L, recode = TRUE)
+paste("KWD runtime ( L =", L, "):", round(kwd.final$runtime / 60, 0), "min for", 
+      ncol(weights) - 1, "estimates and", 
+      length(final.estimates.df$tile.id), "tiles")
+
+# Define names for estimators
+names.weights <- colnames(weights)[-1]
+
+# Develop data frame on the estimtor level with respective KWD values
+kwd.eval <- tibble(estimator = names.weights,
+                   kwd = kwd.final$distance * 1) %>%  # rescaling according to scale
+  mutate(kwd.lower.bound = kwd - ((kwd / 100) * 1.29)) %>%  # for L=3 within 1 percent 
+  mutate(iteration = str_extract(estimator, "[[:digit:]]+"),
+         kind = str_extract(estimator, "[[:alpha:][:punct:]]+")) %>%
+  mutate(iteration = case_when(is.na(iteration) ~ 0,
+                               TRUE ~ as.numeric(iteration))) %>% 
+  group_by(kind) %>% 
+  mutate(min.kwd.kind = min(kwd),
+         kind.group = row_number() / max(row_number())) %>% # find minimum per estimator (for ordering help)
+  ungroup() %>% 
+  arrange(desc(min.kwd.kind), iteration) %>% 
+  mutate(final.order = row_number()) %>% 
+  mutate(estimator.new = factor(final.order, labels = estimator))
+```
+
+```{r kwd-final-estimates-plot, fig.cap="KWD (L=3) values of the final estimates"}
+# define the flat estimator KWD value for reference purposes
+# this is only implemented as a caption in the following plot to prevent scale distortiton
+flat.ref <- round(as.numeric(kwd.eval[kwd.eval$estimator == "u.flat", "kwd"]), 2)
+
+# develop KWD bar plot for selected estimators
+(kwd.final.estimates.plot <- kwd.eval %>% 
+    filter(kind.group == 1 | estimator == "u.DF1",
+           !str_detect(estimator, "flat|prior")) %>% 
+    ggplot(aes(x = estimator.new, y = kwd, fill = kind, alpha = kind.group)) + 
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) + 
+    geom_errorbar(aes(ymin = kwd.lower.bound, ymax = kwd), position = position_dodge(width = 0.9), width = 0.25) +
+    geom_text(aes(x = estimator.new, y = kwd, label = round(kwd, 2)), 
+              position = position_dodge(0.1), hjust = -0.1, color = "Black", size = 3) +
+    scale_alpha(range = c(0.5, 1), 
+                guide = F
+                # labels = unique(kwd.eval$iteration)
+    ) + 
+    scale_fill_ptol(guide = FALSE) +
+    coord_flip() +
+    labs(x = "", y = "KWD", 
+         alpha = "Iteration", 
+         subtitle = paste0("(Reference: Flat = ", flat.ref, ")")) + 
+    theme(legend.position = "bottom"))
+
+# save
+ggsave(filename = "Plots/kwd.final.estimates.plot.png", plot = kwd.final.estimates.plot, device = "png")
+```
+
+## Evaluation: KWD convergence
+
+```{r kwd-convergence-plot, fig.cap="Convergence behavior of adjusted and renormlaized DF and MLE Poisson estimator in terms of KWD"}
+
+# keep only iterated estimators
+kwd.eval.convergence <- kwd.eval %>% 
+  filter(!iteration == 0)
+
+# develop line plot
+(kwd.convergence.plot.log.text <- kwd.eval.convergence %>% 
+    dplyr::select(estimator, kwd, kwd.lower.bound, iteration, kind) %>% 
+    ggplot(aes(x = iteration, y = kwd)) +
+    geom_line(aes(color = kind)) +
+    geom_point(aes(color = kind)) +
+    geom_ribbon(aes(ymin = kwd.lower.bound, ymax = kwd, group = kind), alpha = 0.2) +
+    geom_text_repel(aes(color = kind, label = round(kwd, 2)), size = 3, show.legend  = F) +
+    scale_x_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    annotation_logticks(sides = "b") +
+    labs(color = "Estimator",
+         x = "Iteration",
+         y = "KWD"))
+
+# save
+ggsave("Plots/kwd.convergence.png", kwd.convergence.plot.log.text, device = "png")
+
+
+```
