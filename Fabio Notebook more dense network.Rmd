@@ -1,11 +1,17 @@
 ---
 title: "Supplementary material: Toyworld generation, Estimation and Evaluation"
+author: "Fabio Ricciato, Angelo Coluccia, Marco Ramljak"
+date: "`r Sys.Date()`"
 output:
-  html_document:
+  bookdown::html_document2:
+    code_download: true
     theme: sandstone
     toc: true
     toc_float: true
     number_sections: true
+    fig_caption: yes
+knit: (function(input_file, encoding) { out_dir <- 'docs'; rmarkdown::render(input_file,
+  encoding=encoding, output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
 ---
 
 This notebook provides supplementary material as well as the complete code for reproducing the toyworld, executing all estimators and evaluating these estimators. The toyworld is based on a semi-synthetic data generated process. For this, census data from Germany on a 100m\*100m regular grid has been used, which can be downloaded [here](https://www.zensus2011.de/DE/Home/Aktuelles/DemografischeGrunddaten.html?nn=3065474). Each element in this grid is expressed as a tile. For computation purposes only a small area of Germany was used for the toyworld, namely the area of Munich and its near surroundings. This focus area includes 160,000 tiles. The code for clipping this specific area can be found [here](https://github.com/R-ramljak/MNO_mobdensity/blob/master/Code/Munich_generate.R), which is also part of this research repository. For a mobile phone population the regular census population values are used. To mimic the mobile phone population of one mobile network operator (MNO) the population is reduced to about a third.
