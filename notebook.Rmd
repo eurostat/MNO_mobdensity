@@ -715,7 +715,7 @@ C.vec.df <- C.vec.multiple %>%
   summarise(phones.sum = sum(pop))
 ```
 
-```{r c-vec-distribution, fig.cap="noch als ECCDF einfügen"}
+```{r c-vec-distribution, fig.cap="Distribution of the toyworld population"}
 # log scale breaks for background grid
 minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
 
