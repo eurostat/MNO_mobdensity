@@ -699,12 +699,12 @@ C.vec.multiple.helper <- signal.strength.llh.combined %>%
   filter(coverage.kind == "covered by multiple antennas") %>% 
   group_split(tile.id) 
 
-# Calculate the number of cores for paralized process
-no_cores <- availableCores() - 1
+# Calculate the number of cores for parallelized process
+no_cores <- min(availableCores() - 1,4)
 plan(multisession, workers = no_cores)
 
 # Sampling mobile phones within tiles to cells depending on connection probability
-# parallized process
+# parallelized process
 C.vec.multiple <- C.vec.multiple.helper %>% 
   future_map(~sample(x = .$cell, mean(.$pop),
                      replace = T, prob = .$pij), 
@@ -723,7 +723,7 @@ C.vec.df <- C.vec.multiple %>%
   summarise(phones.sum = sum(pop))
 ```
 
-```{r c-vec-distribution, fig.cap="noch als ECCDF einfügen"}
+```{r c-vec-distribution, fig.cap="Distribution of the toyworld population"}
 # log scale breaks for background grid
 minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
 
