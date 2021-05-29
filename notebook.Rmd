@@ -695,30 +695,22 @@ C.vec.fixed.helper <- signal.strength.llh.combined %>%
   dplyr::select(tile.id, cell, pop)
 
 # One object where tiles are covered by multiple cells
-C.vec.multiple.helper <- signal.strength.llh.combined %>% 
+C.vec.multiple.helper.new <- signal.strength.llh.combined %>% 
   filter(coverage.kind == "covered by multiple antennas") %>% 
-  group_split(tile.id) 
-
-# Calculate the number of cores for paralized process
-no_cores <- availableCores() - 1
-plan(multisession, workers = no_cores)
+  split(.$tile.id) 
 
 # Sampling mobile phones within tiles to cells depending on connection probability
-# parallized process
-C.vec.multiple <- C.vec.multiple.helper %>% 
-  future_map(~sample(x = .$cell, mean(.$pop),
-                     replace = T, prob = .$pij), 
-             .options = furrr_options(seed = T), .progress = T) %>% 
-  future_map(as_tibble, .id = "tile.id", .progress = T) %>% 
-  future_map(~group_by(., value), .progress = T) %>% 
-  future_map(~summarise(., pop.count.rand = n(), .groups = "drop"), 
-             .progress = T)
+C.vec.multiple <- C.vec.multiple.helper.new %>% 
+  map(c.vec.sampler) %>% 
+  map(setattr, name = "class", value = "data.table") %>% 
+  rbindlist(.) %>% 
+  .[, .N, by = V1] %>% 
+  as_tibble() %>% 
+  dplyr::select(cell = V1, pop = N)
 
 # pulling all c-vec helper objects together and develop final c-vec dataframe
 C.vec.df <- C.vec.multiple %>% 
-  bind_rows() %>% 
-  dplyr::select(cell = value, pop = pop.count.rand) %>% 
-  bind_rows(C.vec.fixed.helper) %>% 
+  bind_rows(C.vec.fixed.helper) %>%
   group_by(cell) %>% 
   summarise(phones.sum = sum(pop))
 ```

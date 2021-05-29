@@ -1126,3 +1126,10 @@ custom_ecdf_prep <- function(data) {
   
   return(dat)
 }
+
+
+## dev to cell
+c.vec.sampler <- function(x) {
+  data.table(sample(x = as.character(x$cell), size = mean(x$pop),
+                    replace = T, prob = x$pij))
+}
