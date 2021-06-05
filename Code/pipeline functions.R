@@ -96,7 +96,10 @@ pop_gen <- function(tile.num, base.tile.size,
     mutate(pop = pop.helper) %>% 
     mutate(pop = round(pop, 0)) %>%
     mutate(pop = if_else(pop < 0, 0, pop)) %>%
-    dplyr::select(tile.id, type, category, pop) %>%
+    mutate(centroid.geometry = st_centroid(.$geometry)) %>% 
+    mutate(X.centroid = unlist(map(.$centroid.geometry, 1)),
+           Y.centroid = unlist(map(.$centroid.geometry, 2))) %>% 
+    dplyr::select(tile.id, type, category, pop, X.centroid, Y.centroid) %>%
     arrange(tile.id)
   
   # create non-sf data frame version
@@ -574,9 +577,8 @@ VOR_est <- function(area, cellplan.combined, signal.strength.comb.dt, C.vec.df, 
     ggplot() +
     # geom_sf(aes(fill = phones.sum), color = "blue") +
     geom_sf(color = "blue") +
+    theme(text = element_text(size = 13))
     # scale_fill_viridis_c("Phones") +
-    # labs(title = paste("seed =", seed),
-    labs(title = paste("Seed =", seed))
   
   # Joining the regions with the tile specific data
   seed.voronoi.tile <- seed.voronoi.est %>% 
@@ -626,24 +628,28 @@ VOR_est <- function(area, cellplan.combined, signal.strength.comb.dt, C.vec.df, 
 ### Plots #########
 ###################
 
-map_density <- function(data, var, label) {
+map_density <- function(data, var, label, pointsize = 1.9, pixels = c(900, 900)) {
   
   colors <- c("white", "light grey", "light blue", "blue", "light green", "yellow", "orange", "red", "#654321")
   var.label <- paste(label)
   
   plot <- data %>% 
-    
-    ggplot() +
-    geom_sf(aes_string(fill = var), color = "transparent") +
+    ggplot(aes(x = X.centroid, y = Y.centroid)) +
+    # geom_sf(aes_string(fill = var), color = "transparent") +
+    geom_scattermore(aes_string(color = var), pointsize = pointsize, pixels = pixels) +
     # scico::scale_fill_scico(palette = "bilbao", limits = c(0, 3.48), direction = 1) +
-    scale_fill_manual(values = colors, drop = F, name = label) +
-    theme(axis.title.x = element_blank(),
-          axis.text.x = element_blank(),
-          axis.ticks.x = element_blank(),
-          axis.title.y = element_blank(),
-          axis.text.y = element_blank(),
-          axis.ticks.y = element_blank()) +
-    theme_minimal()
+    scale_color_manual(values = colors, drop = F, name = label) +
+    coord_sf() +
+    theme_minimal() +
+    theme(text = element_text(size = 13)) +
+    labs(x = "", y = "")
+    # theme(axis.title.x = element_blank(),
+    #       axis.text.x = element_blank(),
+    #       axis.ticks.x = element_blank(),
+    #       axis.title.y = element_blank(),
+    #       axis.text.y = element_blank(),
+    #       axis.ticks.y = element_blank()) +
+  
   
   return(plot)
 }
@@ -725,9 +731,15 @@ sig_param_plots <- function(param.df, range.max = 20000, base_size = 11) {
     mutate(below.dominance.th = case_when(sig.dom >= dominance.th ~ "Above", 
                                           sig.dom < dominance.th ~ "Below"))
   
+  minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
   
-  strength.distance.plot <- ggplot(df, aes(x = distance.log10, y = dBm)) + 
+  
+  strength.distance.plot <- ggplot(df, aes(x = distance, y = dBm)) + 
     geom_line(aes(color = label), size = 1.4) +
+    scale_x_log10(labels = scales::trans_format("log10", 
+                                                scales::math_format(10^.x)),
+                  minor_breaks = minor.breaks) +
+    annotation_logticks(sides = "b") +
     labs(title = "Distance vs. Signal strength", 
          x = "log10(Distance (m))",
          y = "Signal strength (dBm)",
@@ -930,9 +942,10 @@ density_plots <- function(data) {
                                                 scales::math_format(10^.x)),
                   minor_breaks = minor.breaks) +
     annotation_logticks(sides = "lb") +
-    labs(title = "ECCDF (Insert ECDF capped at 30)", y = "ECCDF", x = "Mobile phones",  
+    labs(y = "ECCDF", x = "Mobile phones",  
          colour = "") + 
-    theme(legend.position = "bottom") 
+    theme(legend.position = "bottom",
+          text = element_text(size = 13))
   
   ECDF.pop.plot <- ECDF.df %>%   
     ggplot() + 
@@ -982,7 +995,6 @@ scatter_density <- function(point, estimator.name){
                 strip.text.x = element_text(size = 8)))
   
   complete.plot.final <- arrangeGrob(complete.plot[[1]], complete.plot[[2]], complete.plot[[3]], complete.plot[[4]],
-                                     top = textGrob(paste("Joint Density", estimator.name) , gp = gpar(fontsize = 10)),
                                      # padding = 2,
                                      layout_matrix = rbind(c(1, 2, 3, 4)))
   # ggsave("2d_density/d.png", complete.plot.final, device = "png")
