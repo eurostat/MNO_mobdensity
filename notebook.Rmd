@@ -982,11 +982,12 @@ MLE.time <- system.time({
 
 ```
 
-One MLE iteration takes for this toyworld and the specified configurations on average ca. `r paste(round(MLE.time[[3]] / n.iter.MLE, 0))` seconds.
+
+Running the whole `r paste(n.iter.MLE)` MLE iterations takes about `r paste(MLE.time[[3]])` seconds for an average of `r paste(round(MLE.time[[3]] / n.iter.MLE, 0))` seconds per iteration.
 
 ## Estimation: DF
 
-The DF estimator also assumes the same parameters as the SB and MLE-Poisson estimator, however, it is computed on the supertile level. The necessary matrix inversion is computed via the Moore Penrose inverse. Given the fact that the raw DF estimate can contain negative values, it is adjusted and renormalized in the following way: All estimate values below 1 are clipped at 1 and then one iteration with `EM_est()` is conducted in order to assure that the final estimates are of the same mass as the c-vector. Therefore, the DF estimator is the raw DF estimate after one iteration (DF1).
+The DF estimator also assumes the same parameters as the SB and MLE-Poisson estimator, however, it is computed on the supertile level. The necessary matrix inversion is computed via the Moore-Penrose inverse. Given the fact that the raw DF estimate can contain negative values, it is adjusted and renormalized in the following way: All estimate values below 1 are clipped at 1 and then one iteration with `EM_est()` is conducted in order to assure that the final estimates are of the same mass as the c-vector. Therefore, the DF estimator is the raw DF estimate after one iteration (DF1).
 
 ```{r DF-estimator}
 # Time log

@@ -642,7 +642,8 @@ map_density <- function(data, var, label, pointsize = 1.9, pixels = c(900, 900))
     coord_sf() +
     theme_minimal() +
     theme(text = element_text(size = 13)) +
-    labs(x = "", y = "")
+    labs(x = "", y = "") +
+    guides(colour = guide_legend(override.aes = list(shape = 15, size = 5)))
     # theme(axis.title.x = element_blank(),
     #       axis.text.x = element_blank(),
     #       axis.ticks.x = element_blank(),
