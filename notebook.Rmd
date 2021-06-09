@@ -326,7 +326,7 @@ The following table shows the number of towers and corresponding cells per layer
 ```{r}
 # descriptives for radio network 
 cellplan.combined %>% 
-  mutate(tower = substr(cell, 1, 5)) %>% 
+  mutate(tower = str_extract(cell, "(.*).C"))%>% 
   group_by(cell.kind) %>% 
   summarise(n.tower = n_distinct(tower),
             n.cell = n()) %>% 
