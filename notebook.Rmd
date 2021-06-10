@@ -330,10 +330,11 @@ cellplan.combined %>%
   group_by(cell.kind) %>% 
   summarise(n.tower = n_distinct(tower),
             n.cell = n()) %>% 
+  left_join(sig.pram.plots$df.reduced.output, by = "cell.kind") %>% 
   mutate(cell.kind = case_when(cell.kind == "MA" ~ "Macro",
                                cell.kind == "ME" ~ "Meso",
                                cell.kind == "MI" ~ "Micro")) %>% 
-  datatable(colnames = c('Layer', 'Number Towers', 'Number Cells'))
+  datatable(colnames = c('Layer', 'Number Towers', 'Number Cells', 'Max. Distance Dominance-th 0.5 in m', 'Max. Distance Dominance-th 0.05 in m'))
 ```
 
 The following chunk is merely executed to develop a smoother visualization of the radio cell coverage profiles. For this, the signal strength is calculated on a finer grid 25m\*25m. This finer grid is only relevant for this chunk and the following contour visualizations. The contours are interpolated based on the tiles' signal dominance values and the tile centroids.
@@ -943,7 +944,7 @@ ggsave("Plots/VOR_regions_barycenter.png", VOR.barycenter$Voronoi.regions.plot, 
 
 ## Estimation: Simple Bayes
 
-The Simple Bayes (SB) estimator needs three parameters, the c-vector, an connection probability model (P\*) and a prior vector. The following custom R-function (`EM_est()`) is basically the same for the MLE Poisson and SB estimator. The only difference is that the SB estimator uses only one (i.e. the first) iteration. Furthermore, this function contains a parameter `ldt`, which can potentially reduce the iterations until convergence. It clips all estimates below this value to exactly 0 as the original estimator could not reach exactly 0. Most parameters are assumed on the `datatable` format for computational speed purposes.
+The Simple Bayes (SB) estimator needs three parameters, the c-vector, an connection probability model (P\*) and a prior vector. The following custom R-function (`EM_est()`) is basically the same for the MLE/EM and SB estimator. The only difference is that the SB estimator uses only one (i.e. the first) iteration. Furthermore, this function contains a parameter `ldt`, which can potentially reduce the iterations until convergence. It clips all estimates below this value to exactly 0 as the original estimator could not reach exactly 0. Most parameters are assumed on the `datatable` format for computational speed purposes.
 
 ```{r SB-estimator}
 # caclulate SB estimator
@@ -957,17 +958,17 @@ SB.est <- EM_est(c.vec.dt = c.vec.dt,
   dplyr::rename(tile.id = j, prior.SB = i.u, u.SB = u1)
 ```
 
-## Estimation: MLE Poisson
+## Estimation: MLE/EM
 
-The MLE Poisson estimator assumes the same parameters as the SB estimator, plus the number of iterations it should run. For convenience, `EM_est()` contains the argument `selected.range`, which gives the user the option to specify which iterations should be delivered in the output data frame.
+The MLE/EM estimator assumes the same parameters as the SB estimator, plus the number of iterations it should run. For convenience, `EM_est()` contains the argument `selected.range`, which gives the user the option to specify which iterations should be delivered in the output data frame.
 
-```{r MLE-Poisson-estimator}
+```{r MLE-EM-estimator}
 # define number of iterations 
 n.iter.MLE <- 200
 
 # Time log
 MLE.time <- system.time({
-  # calculate MLE Poisson estimator
+  # calculate MLE/EM estimator
   MLE.est <- EM_est(c.vec.dt = c.vec.dt, 
                     P.dt = P.star.dt, 
                     a.vec.dt = a.tile.dt, 
@@ -983,11 +984,11 @@ MLE.time <- system.time({
 ```
 
 
-Running the whole `r paste(n.iter.MLE)` MLE iterations takes about `r paste(MLE.time[[3]])` seconds for an average of `r paste(round(MLE.time[[3]] / n.iter.MLE, 0))` seconds per iteration.
+Running the whole `r paste(n.iter.MLE)` MLE/EM iterations takes about `r paste(MLE.time[[3]])` seconds for an average of `r paste(round(MLE.time[[3]] / n.iter.MLE, 0))` seconds per iteration.
 
 ## Estimation: DF
 
-The DF estimator also assumes the same parameters as the SB and MLE-Poisson estimator, however, it is computed on the supertile level. The necessary matrix inversion is computed via the Moore-Penrose inverse. Given the fact that the raw DF estimate can contain negative values, it is adjusted and renormalized in the following way: All estimate values below 1 are clipped at 1 and then one iteration with `EM_est()` is conducted in order to assure that the final estimates are of the same mass as the c-vector. Therefore, the DF estimator is the raw DF estimate after one iteration (DF1).
+The DF estimator also assumes the same parameters as the SB and MLE/EM estimator, however, it is computed on the supertile level. The necessary matrix inversion is computed via the Moore-Penrose inverse. Given the fact that the raw DF estimate can contain negative values, it is adjusted and renormalized in the following way: All estimate values below 1 are clipped at 1 and then one iteration with `EM_est()` is conducted in order to assure that the final estimates are of the same mass as the c-vector. Therefore, the DF estimator is the raw DF estimate after one iteration (DF1).
 
 ```{r DF-estimator}
 # Time log
@@ -1006,8 +1007,8 @@ DF.raw.time <- system.time({
 DF.est <- EM_est(c.vec.dt = c.vec.dt, 
                  P.dt = P.star.supertile.dt, 
                  a.vec.dt = DF.raw.est.dt,
-                 selected.range = 1,
-                 n.iter = 1,
+                 selected.range = c(1:10, seq(20, 90, 10), seq(100, 200, 50)),
+                 n.iter = n.iter.MLE,
                  message = F,
                  ldt = 10^-04) %>% 
   rename_with(.fn = ~gsub("u", "u.DF", x = .x, fixed = T), 
@@ -1031,9 +1032,9 @@ The last part of this notebook follows through with evaluating the different est
 ```{r evaluation-setup}
 # putting everything into an sf-dataframe together
 final.estimates.sf <- area$area.sf %>% 
-  left_join(VOR.tower.est, by = "tile.id") %>% 
-  left_join(VOR.offset.est, by = "tile.id") %>% 
-  left_join(VOR.barycenter.est, by = "tile.id") %>% 
+  left_join(VOR.tower.est, by = "tile.id") %>%
+  left_join(VOR.offset.est, by = "tile.id") %>%
+  left_join(VOR.barycenter.est, by = "tile.id") %>%
   left_join(SB.est, by = "tile.id") %>%
   left_join(MLE.est, by = "tile.id") %>% 
   left_join(DF.est, by = "tile.id")
@@ -1174,7 +1175,7 @@ ggsave("Plots/u.VOR.barycenter.2d.density.png", scatter.density.plots$u.VOR.bary
 # define legend labels for maps
 maps.labels <- list("GTP  ", 
                     "VOR_t", "VOR_o", "VOR_b", 
-                    "SB   ", "MLE  ", "DF   ")
+                    "SB   ", "MLE  ", "DF1  ", "DF200")
 
 # check if there is divergence, what are the maximum estimates per tile for each estimator
 max.maps <- final.estimates.sf %>% 
@@ -1222,14 +1223,19 @@ maps.estimation.density$u.SB
 ggsave("Plots/u.SB.map.png", maps.estimation.density$u.SB, device = "png")
 ```
 
-```{r spatial-density-MLE200, fig.cap="Spatial Density MLE Poisson 200"}
+```{r spatial-density-MLE200, fig.cap="Spatial Density MLE/EM 200"}
 maps.estimation.density$u.MLE200
 ggsave("Plots/u.MLE200.map.png", maps.estimation.density$u.MLE200, device = "png")
 ```
 
-```{r spatial-density-DF, fig.cap="Spatial Density DF"}
+```{r spatial-density-DF1, fig.cap="Spatial Density DF1"}
 maps.estimation.density$u.DF1
 ggsave("Plots/u.DF1.map.png", maps.estimation.density$u.DF1, device = "png")
+```
+
+```{r spatial-density-DF200, fig.cap="Spatial Density DF200"}
+maps.estimation.density$u.DF200
+ggsave("Plots/u.DF2.map.png", maps.estimation.density$u.DF200, device = "png")
 ```
 
 ## Evaluation: KWD
@@ -1319,10 +1325,10 @@ ggsave(filename = "Plots/kwd.final.estimates.plot.png", plot = kwd.final.estimat
 
 ## Evaluation: KWD convergence
 
-```{r kwd-convergence-plot, fig.cap="Convergence behavior of MLE Poisson estimator in terms of KWD"}
+```{r kwd-convergence-plot, fig.cap="Convergence behavior of MLE/EM  and DF estimator in terms of KWD"}
 # keep only iterated estimators
 kwd.eval.convergence <- kwd.eval %>% 
-  filter(str_detect(estimator, "MLE"))
+  filter(!iteration == 0)
 
 # develop line plot
 (kwd.convergence.plot.log.text <- kwd.eval.convergence %>% 

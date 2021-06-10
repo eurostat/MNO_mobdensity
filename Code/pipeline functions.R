@@ -732,6 +732,23 @@ sig_param_plots <- function(param.df, range.max = 20000, base_size = 11) {
     mutate(below.dominance.th = case_when(sig.dom >= dominance.th ~ "Above", 
                                           sig.dom < dominance.th ~ "Below"))
   
+  # special table to find maximum range distance per cell tile at defined sig dom thresholds
+  df.reduced.output <- df %>% 
+    dplyr::select(cell.kind, sig.dom, distance) %>% 
+    mutate(dif.05 = abs(sig.dom - 0.5),
+           dif.005 = abs(sig.dom - 0.05)) %>% 
+    group_by(cell.kind) %>% 
+    filter(dif.05 == min(dif.05) | 
+           dif.005 == min(dif.005)) %>% 
+    ungroup %>% 
+    pivot_longer(cols = starts_with("dif"), names_to = "threshold", values_to = "dom.difference") %>% 
+    group_by(cell.kind, threshold) %>% 
+    filter(dom.difference == min(dom.difference)) %>% 
+    ungroup() %>% 
+    dplyr::select(cell.kind, threshold, max.distance = distance) %>% 
+    pivot_wider(id_cols = cell.kind, names_from = threshold, values_from = max.distance)
+  
+  
   minor.breaks <- rep(1:9, 21) * (10^rep(-10:10, each = 9))
   
   
@@ -803,7 +820,8 @@ sig_param_plots <- function(param.df, range.max = 20000, base_size = 11) {
               strength.dominance.plot = strength.dominance.plot,
               dominance.distance.plot = dominance.distance.plot,
               table.gen = table.gen,
-              table.mod = table.mod))
+              table.mod = table.mod,
+              df.reduced.output = df.reduced.output))
   
 }
 
