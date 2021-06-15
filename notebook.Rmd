@@ -654,9 +654,9 @@ coverage.map.dom.df.binary <- signal.strength.summary.ck %>%
     theme(text = element_text(size = 13)))
 ```
 
-## Toyworld Generation: Device to cell association
+## Toyworld Generation: Phone to cell association
 
-This subchapter refers to the final task in the toyworld generation: the device to cell association. Here we bring the population with the network together and stochastically assign the mobile phone population in each tile to the respective antennas. The result is the so-called c-vector, which describes the number of mobile phones assigned to each cell. The basis parameter for this assignment is the signal dominance which is normalized in the form of a conditional probability. These conditional probabilities describe the elements of the P.matrix, which is the main model to estimate (geolocation module).
+This subchapter refers to the final task in the toyworld generation: the phone to cell association. Here we bring the population with the network together and stochastically assign the mobile phone population in each tile to the respective antennas. The result is the so-called c-vector, which describes the number of mobile phones assigned to each cell. The basis parameter for this assignment is the signal dominance which is normalized in the form of a conditional probability. These conditional probabilities (emission probabilities) describe the elements of the P.matrix, which is the main model to estimate (geolocation module).
 
 ```{r dev-to-cell}
 # specify the option of differing parameters for sig_d_th and max_overlapping_cells depending on the cell type in custom create_strength_llh function
@@ -761,7 +761,7 @@ c.vec.ecdf <- c.vec.density.data %>%
 ggsave("Plots/histogram.c.vec.png", combined.c.vec, device = "png")
 ```
 
-In the following code chunk we are specifying the P matrix, with tiles as columns, antennas as rows and antenna-tile relationships as the elements. This matrix can be described as the connection probability. Each column adds up to 1, meaning it is column stochastic. This particular version of the connection probability can be described as exact, as it represents the same information which is used for the data generating mechanism in the development of the toyworld. We will define a copy of the P matrix, which will be called P\* (P.star) and describes the modeling parameter necessary for all estimators, excluding the Voronoi estimators.
+In the following code chunk we are specifying the P matrix, with tiles as columns, antennas as rows and antenna-tile relationships (emission probabilities) as the elements. This matrix can be described as the connection probability. Each column adds up to 1, meaning it is column stochastic. This particular version of the connection probability can be described as exact, as it represents the same information which is used for the data generating mechanism in the development of the toyworld. We will define a copy of the P matrix, which will be called P\* (P.star) and describes the modeling parameter necessary for all estimators, excluding the Voronoi estimators.
 
 Furthermore, in the following code chunk we implement the process of consolidation a.k.a. the development of super tiles. These are tiles in the P matrix that are indistinguishable from each other based on their relationships to antennas (i.e. columns in the P matrix that are exactly the same). These tiles will yield in all estimators the exact same value, therefore, to reduce computational resources, they can be consolidated to supertiles and afterwards disaggregated again.
 
