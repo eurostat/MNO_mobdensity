@@ -18,7 +18,7 @@
 
 -   *mobloc*: This R-package is used to model cell footprints [1].
 
--   Spatial KWD: This R-package is used to approximate the Kantorovich-Wasserstein distances, comparing the spatial density estimations with the ground truth spatial density [2].
+-   *SpatialKWD*: This R-package is used to approximate the Kantorovich-Wasserstein distances, comparing the spatial density estimations with the ground truth spatial density [2].
 
 **Note:** Large code blocks and custom functions are under further development resulting in an R-package this summer. Further development can be followed here: <https://github.com/R-ramljak/MNOanalyze>
 
@@ -29,7 +29,7 @@
 | *status*  | 2021 - closed                                                                                                                                               |
 | *license* | [EUPL](https://joinup.ec.europa.eu/sites/default/files/custom-page/attachment/eupl_v1.2_en.pdf) *(concerning the source code, please cite this repository)* |
 
-References:
+**References:**
 
 -   [1] Tennekes M. (2017): [**R package for mobile location algorithms and tools**](https://github.com/MobilePhoneESSnetBigData/mobloc).
 
