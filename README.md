@@ -10,9 +10,17 @@
 
 **Journal:** ... (under review)
 
-**Full article:** <https://arxiv.org/pdf/2009.05410.pdf>
+**Full article (Preprint):** <https://arxiv.org/pdf/2009.05410.pdf>
 
 **Supplementary Material and code for reproduction:** <https://r-ramljak.github.io/MNO_mobdensity/>
+
+**Selected ressources:**
+
+-   *mobloc*: This R-package is used to model cell footprints [1].
+
+-   Spatial KWD: This R-package is used to approximate the Kantorovich-Wasserstein distances, comparing the spatial density estimations with the ground truth spatial density [2].
+
+**Note:** Large code blocks and custom functions are under further development resulting in an R-package this summer. Further development can be followed here: <https://github.com/R-ramljak/MNOanalyze>
 
 |           |                                                                                                                                                             |
 |-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -20,3 +28,11 @@
 | *version* | 1.0                                                                                                                                                         |
 | *status*  | 2021 - closed                                                                                                                                               |
 | *license* | [EUPL](https://joinup.ec.europa.eu/sites/default/files/custom-page/attachment/eupl_v1.2_en.pdf) *(concerning the source code, please cite this repository)* |
+
+References:
+
+-   [1] Tennekes M. (2017): [**R package for mobile location algorithms and tools**](https://github.com/MobilePhoneESSnetBigData/mobloc).
+
+-   Bassetti F., Gualandi S., Veneroni M. [**On the computation of Kantorovich-Wasserstein distances between 2D-histograms by uncapacitated minimum cost flows**](https://epubs.siam.org/doi/abs/10.1137/19M1261195). SIAM J. Optim., 30(3), 2441–2469, 2020. Preprint on arXiv: [1804.00445](https://arxiv.org/abs/1804.00445).
+
+
